@@ -100,14 +100,15 @@ def _persist(engine, task_id: str, state: dict) -> int:
 _current_budget: Budget | None = None
 
 
-def cmd_research(topic: str, *, db_path=None, tools_builder=default_tools_builder) -> int:
+def cmd_research(topic: str, *, db_path=None, tools_builder=default_tools_builder,
+                 budget_builder=_make_budget) -> int:
     global _current_budget
     engine = db.make_engine(db_path or DB_PATH)
     db.init_db(engine)
     db.mark_stale_interrupted(engine)  # 启动时遗留 running → interrupted(§3.4)
 
     task_id = db.create_task(engine, topic=topic)
-    budget = _make_budget()
+    budget = budget_builder()
     _current_budget = budget
 
     t0 = time.monotonic()
@@ -154,6 +155,10 @@ def cmd_cleanup(*, db_path=None, assume_yes: bool = False) -> int:
 
 
 def main(argv=None) -> int:
+    # Windows 控制台默认 GBK, 中文时间线会 UnicodeEncodeError/probe_results.md 同类坑
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8", errors="replace")
     parser = argparse.ArgumentParser(prog="orca",
                                      description="Orca Research(Deep Search 研究助手)")
     sub = parser.add_subparsers(dest="command", required=True)

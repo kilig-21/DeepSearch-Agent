@@ -23,6 +23,7 @@ from .config import (
 )
 from .events import console_emit
 from .graph import GraphTools, run_research
+from .persist import persist_task_results
 
 
 def _make_budget() -> Budget:
@@ -60,63 +61,23 @@ def default_tools_builder(budget: Budget) -> GraphTools:
     )
 
 
-def _persist(engine, task_id: str, state: dict) -> int:
-    """evidences/sources/search_rounds 落库 + 报告与终态同事务提交(§3.4)。"""
-    source_id_by_url: dict[str, int] = {}
-    for ev in state.get("evidence", []):
-        if ev.url not in source_id_by_url:
-            source_id_by_url[ev.url] = db.record_source(
-                engine, task_id, url=ev.url, title=ev.title, domain=ev.domain,
-                source_type=ev.source_type, content_hash=ev.content_hash,
-                origin_group_id=ev.origin_group_id)
-        db.record_evidence(engine, task_id, evidence_id=ev.evidence_id,
-                           source_id=source_id_by_url[ev.url],
-                           origin_group_id=ev.origin_group_id,
-                           source_type=ev.source_type, quote=ev.quote,
-                           validated=True)
-    for r in state.get("search_rounds", []):
-        db.record_search_round(engine, task_id, round_no=r["round_no"],
-                               query=r["query"],
-                               result_count=r["result_count"],
-                               credits_used=r["credits_used"])
-
-    budget = _current_budget
-    usage = budget.usage_snapshot() if budget else {
-        "llm_tokens": 0, "tavily_credits": 0, "jina_tokens": 0}
-    return db.complete_task_with_report(
-        engine, task_id,
-        final_md=state.get("report_md", ""),
-        citation_map=state.get("citation_map", {}),
-        stop_reason=state.get("stop_reason") or "single_pass",
-        config_json={"allowed_domains": sorted(ALLOWED_DOMAINS),
-                     "proxy": bool(FETCH_PROXY)},
-        token_cost=usage["llm_tokens"],
-        credits_cost=usage["tavily_credits"],
-        duration_s=state.get("duration_s", 0.0),
-        usage=usage,
-    )
-
-
-_current_budget: Budget | None = None
-
-
 def cmd_research(topic: str, *, db_path=None, tools_builder=default_tools_builder,
                  budget_builder=_make_budget, out: dict | None = None) -> int:
-    global _current_budget
     engine = db.make_engine(db_path or DB_PATH)
     db.init_db(engine)
     db.mark_stale_interrupted(engine)  # 启动时遗留 running → interrupted(§3.4)
 
     task_id = db.create_task(engine, topic=topic)
     budget = budget_builder()
-    _current_budget = budget
 
     t0 = time.monotonic()
     try:
         tools = tools_builder(budget)
         state = _run(tools, topic, task_id)
         state["duration_s"] = time.monotonic() - t0
-        report_id = _persist(engine, task_id, state)
+        report_id = persist_task_results(
+            engine, task_id, state, budget,
+            allowed_domains=set(ALLOWED_DOMAINS), proxy=FETCH_PROXY is not None)
         if out is not None:
             # 评测 runner 经此取回本次任务结果; 禁止用 list_tasks()[-1]
             # (并发写入同一 DB 时会拿错行)

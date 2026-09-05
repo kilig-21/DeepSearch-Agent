@@ -270,6 +270,17 @@ def list_search_rounds(engine, task_id: str) -> list[dict]:
                 for r in rows]
 
 
+def list_reports(engine) -> list[dict]:
+    """历史报告卡片(§7 /history: 标题/时间/stop_reason/分账成本)。"""
+    with Session(engine) as session:
+        rows = session.scalars(
+            select(Report).order_by(Report.created_at.desc())).all()
+        return [{"id": r.id, "task_id": r.task_id, "topic": r.topic,
+                 "stop_reason": r.stop_reason, "token_cost": r.token_cost,
+                 "credits_cost": r.credits_cost, "duration_s": r.duration_s,
+                 "created_at": r.created_at} for r in rows]
+
+
 def list_tasks(engine) -> list[dict]:
     with Session(engine) as session:
         rows = session.scalars(select(Task).order_by(Task.created_at)).all()

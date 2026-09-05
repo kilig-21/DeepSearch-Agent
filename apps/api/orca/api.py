@@ -14,7 +14,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse, PlainTextResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from . import db
@@ -98,6 +98,28 @@ def create_app(*, db_path=None, tools_builder=None, budget_builder=None,
         if not manager.request_cancel(task_id):
             raise HTTPException(status_code=409, detail="任务已终态, 不可取消")
         return {"task_id": task_id, "cancelling": True}
+
+    @app.get("/api/reports")
+    def list_reports() -> list[dict]:
+        return db.list_reports(engine)
+
+    # .md 路由须先于 {report_id} 注册, 否则 "5.md" 被吞进 int 转换报 422
+    @app.get("/api/reports/{report_id}.md")
+    def report_markdown(report_id: int):
+        report = db.get_report(engine, report_id)
+        if report is None:
+            raise HTTPException(status_code=404, detail="报告不存在")
+        return PlainTextResponse(report["final_md"],
+                                 media_type="text/markdown; charset=utf-8")
+
+    @app.get("/api/reports/{report_id}")
+    def report_detail(report_id: int) -> dict:
+        report = db.get_report(engine, report_id)
+        if report is None:
+            raise HTTPException(status_code=404, detail="报告不存在")
+        return {**report,
+                "evidences": db.list_evidences(engine, report["task_id"]),
+                "sources": db.list_sources(engine, report["task_id"])}
 
     return app
 

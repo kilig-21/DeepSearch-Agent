@@ -252,13 +252,17 @@ POST /api/research/{task_id}/cancel           → 202;后端实际停止后事�
 - **只有正式结果提交成功才标记 `completed`**;writer 执行失败时,即使此前证据充分也标 `execution_error`
 - **报告写入与 tasks 的 completed/report_id 更新在同一个数据库事务内提交,提交后才发送 done**;最终状态一旦提交,后续事件不得覆盖
 
-**状态快照结构(v1.2 补)**:
+**状态快照结构(v1.2 补;v1.4 修正口径:进度为嵌套 `progress` 结构,与实现一致)**:
 
 ```json
 {"task_id": "...", "status": "running|completed|failed|cancelled|interrupted",
- "round_no": 2, "sub_questions": [...], "sources_read": 5,
- "stop_reason": null, "report_id": null, "seq": 42}
+ "round_no": 2, "sub_questions": [...],
+ "progress": {"sources_read": 5, "evidence_count": 3},
+ "stop_reason": null, "report_id": null, "report_md": "", "citation_map": {},
+ "seq": 42}
 ```
+
+> v1.4 补充:运行中且 writer 已产出片段时,`report_md` 为**已生成草稿正文**(非空串),与 `seq`/`progress` 对应同一时点(同一锁临界区内取全);cancelled/failed/interrupted 时草稿如实为空。
 
 **事件格式**(每条含 `task_id`、服务端递增 `id`、`ts`):
 
@@ -303,9 +307,10 @@ data: {"task_id":"t_xxx","ts":"...","round":1,"query":"...","results":[...]}
 - 心跳注释帧为 `": ping\n\n"`(标准 SSE 注释行,客户端不可见),每 15~30 秒;心跳**缓解空闲超时,不代替关闭代理缓冲**——部署 nginx 时须配 `proxy_buffering off` / `X-Accel-Buffering: no`
 - 业务事件以空行(`\n\n`)结束
 
-**重连与恢复语义(v1.3 统一,修正"刷新丢前半段")**:
-- **普通断线(页面状态仍在)**:EventSource 自动重连,浏览器自动携带已接收的最大事件 id → 服务端从内存环形缓冲补发;超出缓冲 → 发 `snapshot` 对齐
-- **刷新/视图丢失(页面正文已清空)**:**必须先获取完整 `snapshot`**(新建连接时由服务端直接发送)替换视图后再接增量——**不得仅凭 sessionStorage 保存的 seq 请求增量**(否则报告前半段丢失)。原生 EventSource **没有向服务端发送业务事件的接口**,请求只能通过 URL 参数表达(如 `?task_id=...&after=<seq>`)
+**重连与恢复语义(v1.4 收敛游标口径;v1.3 统一"刷新丢前半段")**:
+- **游标唯一来源:HTTP `Last-Event-ID` 请求头**(EventSource 自动重连时浏览器自动携带已接收的最大事件 id);**不存在 `?after=` 之类 URL 游标参数**——任何路径都不得"仅凭客户端 seq 请求增量"(v1.4)
+- **普通断线(页面状态仍在)**:EventSource 自动重连携带 `Last-Event-ID` → 服务端校验其落在环形缓冲覆盖范围内(缓冲首事件 seq ≤ id ≤ 当前 seq)→ 从缓冲补发;无游标、零游标(`Last-Event-ID: 0`)或超出/超前缓冲覆盖 → **一律回退完整 `snapshot` 对齐**(v1.4)
+- **刷新/视图丢失(页面正文已清空)**:新建连接**不带任何游标** → 服务端直接先发完整 `snapshot` 替换视图后再接增量——**不得仅凭 sessionStorage 保存的 seq 请求增量**(否则报告前半段丢失)。原生 EventSource 无自定义请求接口,新连接本就不携带 `Last-Event-ID`,服务端按"无游标"处理(v1.4 删除 v1.3 的 `?after=` URL 参数示例,与实现口径统一)
 - **MVP 不持久化 token 级事件**;进程重启后草稿文本不可恢复,如实告知
 - 客户端收到业务终态(`done`/`task_failed`/`cancelled`)**或显示终态的 snapshot**(completed/failed/cancelled/**interrupted**,v1.3)后主动 `close()`——防止重启后对 interrupted 快照无限重连;**断开 SSE 只取消订阅,不取消研究任务**(两者语义分离)
 
@@ -653,9 +658,42 @@ GET  /api/health
 
 **Phase 1B 契约验证场景**(评审建议,已写入 §4 Phase 1B 验收):writer 执行中取消 / 额度耗尽 / 刷新后恢复完整正文 / 进程重启 interrupted——**用运行结果证明落地,不再扩展抽象设计条款**。
 
-### 第四轮评审(待定)
+### 第四轮验收评审(2026-09-06,评审方人工;**结论:打回**)
 
-如发起,请核对:上表 15 项是否闭合、有无新引入问题(重点检查 §3.4/§3.6 修改后是否与 §5/§6/§7 保持一致)。
+Phase 1B 交付物(后端 API/SSE/前端 + 测试)经评审确认 11 项发现,其中 7 项后端(P1-P7)、4 项前端(F1-F4),全部确认为有效缺陷。核心问题:**预算检查滞后于抓取动作、取消无法在流式过程中生效、运行中 snapshot 不带正文、SSE 游标路径过多且可"仅凭客户端 seq 请求增量"、终态发布非原子、完成路径可被后到的 completed 覆盖已取消任务、前端 sanitize schema 传参崩溃且把 evidence_id 当 href**;另有 8 类测试覆盖缺口(含既有验收测试"等任务完成才连接"的假覆盖)。
+
+**v1.4 修复记录(2026-09-06)**:
+
+| # | 评审发现 | 修复 | 落实位置 | 状态 |
+|---|---|---|---|---|
+| P1 | 预算检查滞后:reader 循环内逐篇抓取/摘要前不重查预算 | 篇间与摘要前双重检查(控制类即时终止;研究额度耗尽→保留已有候选证据走 writer 收尾);测试断言多页任务中途耗尽后实际模型调用次数不超预算 | `graph.py` reader、`test_graph.py` | ✅ |
+| P2 | writer 非流式,取消只能等整段生成完 | `llm.chat_stream`(httpx SSE + include_usage,流式不重试)→ writer 逐片段 emit `report_delta(draft=true)`,片段间经取消检查点;保留"校验→落库→正式版"阶段;校验失败修订后发 replace 帧 | `llm.py`、`graph.py` writer、`cli.py` | ✅ |
+| P3 | 运行中 snapshot `report_md` 恒空串 | snapshot 在同一锁临界区内一次取全 `draft_md`/进度/`seq`(同一时点);running 且有草稿时 `report_md` 为已生成正文;修订 replace 帧整体替换草稿而非追加 | `task_manager.py` snapshot、`_track_progress` | ✅ |
+| P4 | SSE 游标路径过多:`?after=` URL 参数、`Last-Event-ID: 0` 可凭客户端 seq 从头补发 | 删除 `?after=` 路径,游标唯一来源 `Last-Event-ID` 头;零游标/无游标一律先发完整 snapshot;带游标须落在缓冲覆盖范围内否则回退 snapshot;`resume_plan` 决策与 seq/缓冲读取同一锁临界区;`events_after` 读加锁 | `api.py`、`task_manager.py` | ✅ |
+| P5 | 终态提交(标志/状态/seq/缓冲)分散,终态事件可读前标志已可见(SSE 可能提前关闭丢帧) | `_record_terminal` 全程持锁:terminal 标志+状态+seq+缓冲+订阅推送同一临界区一次完成 | `task_manager.py` | ✅ |
+| P6 | 完成路径无条件提交,"cancelled 后 completed 覆盖"可复现 | `complete_task_with_report` 改同事务条件更新(`UPDATE ... WHERE status='running'`,原子防 TOCTOU);未抢到终态提交权→报告随事务回滚返回 None,worker 丢弃后到结果不发 done | `db.py`、`task_manager.py`、`cli.py` | ✅ |
+| P7 | §3.4 两处口径与实现不符(快照示例扁平 `sources_read`;`?after=` URL 参数示例) | §3.4 快照示例改嵌套 `progress` 并补 `report_md` 同一时点说明;重连语义删 `?after=` 示例,游标唯一来源 `Last-Event-ID` | PLAN.md §3.4(v1.4) | ✅ |
+| F1 | 前端 sanitize schema 传参错误(`tagNames: {img: null}` 类型错误)→ 渲染抛 TypeError | schema 基于 `defaultSchema` 改写(`tagNames` 允许列表剔除 `img`);组件测试:普通 Markdown/危险 HTML/img 三路径,断言 img 剔除且零网络请求 | `report-view.tsx`、`tests/report-view.test.tsx` | ✅ |
+| F2 | hook 按 payload seq 去重,不读服务端 `id:` 字段 | 序号一律读 `MessageEvent.lastEventId`,任何视图更新前统一过滤重复/过期序号(snapshot 除外);hook 测试:真实事件 ID 驱动,重复帧零渲染变化、时间线不缺项、伪造 payload seq 无效 | `use-task.ts`、`tests/use-task.test.tsx` | ✅ |
+| F3 | report-view 把 evidence_id 当 href | `[n]` 经详情数据 `evidences.source_id → sources` 联查真实 URL(`lib/citations.ts`);`[n]→evidence_id` 数据契约保留 | `report-view.tsx`、`use-task.ts`、`history/page.tsx` | ✅ |
+| F4 | completed snapshot 自带正文不被利用;详情失败静默停留草稿 | completed snapshot 自带正文直接作正式版;详情失败显示重试入口(`retryFinalReport`),不静默 | `use-task.ts`、`app/page.tsx` | ✅ |
+
+**测试补齐情况**(评审列 8 类,1-6 全覆盖 + 7 组件级):
+
+| 类 | 场景 | 测试 |
+|---|---|---|
+| 1 | writer 流式中已收到多个片段,取消后不落正式报告 | `test_cancel_during_writer_stream_receives_deltas_then_no_report` |
+| 2 | running snapshot 正文与 seq 一致;刷新后逐字无丢失无重复 | `test_snapshot_running_includes_draft_consistent_with_seq`、`test_refresh_recovery_draft_plus_deltas_verbatim` |
+| 3 | reader 中途研究/总额度耗尽,断言后续模型调用次数 | `test_reader_rechecks_research_budget_between_pages`、`test_reader_rechecks_time_before_summarize` |
+| 4 | 零游标、缓冲溢出、snapshot 与事件发布竞争 | `test_zero_last_event_id_falls_back_to_snapshot`、`test_after_query_param_is_deleted_falls_back_to_snapshot`、`test_ahead_last_event_id_falls_back_to_snapshot`、`test_snapshot_then_replay_gapless_under_publish_race` |
+| 5 | 终态发布窗口与取消/完成竞争(数据库状态与事件一致性) | `test_completed_persist_loses_race_to_cancel`、`test_terminal_record_atomic_under_concurrent_events`、`test_terminal_event_visible_before_flag_when_subscribed` |
+| 6 | 真实 SSE 事件 ID 驱动的 hook 去重与时间线完整性 | `tests/use-task.test.tsx`(6 用例) |
+| 7 | Markdown 实际渲染三路径 + 远程图片零请求 | `tests/report-view.test.tsx`(3 用例) |
+| 8 | 真实进程强杀重启 interrupted | Phase 1B 块 8 已用真实 uvicorn 演示(`test_scenario_4_restart_interrupted_and_history` 覆盖逻辑路径) |
+
+**假覆盖修正**:场景①事件流断言改为缓冲内游标走补发路径(原 `?after=0` 路径已删);`test_running_task_snapshot_has_draft_progress` 改为 writer 已产出片段时连接并断言 snapshot 正文非空(原实现等价于"未断言草稿正文")。
+
+**自验结果**:后端 pytest 202 passed(含新增 P1-P6 与测试类 1-5);前端 vitest 9 passed(F1-F4 与测试类 6-7)+ `tsc --noEmit` 通过。
 
 ---
 

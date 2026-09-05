@@ -80,6 +80,7 @@ class FakeClient:
         resp = self.routes[url]
         if isinstance(resp, Exception):
             raise resp
+        resp.url = url  # 模拟 httpx 行为: resp.url 为实际请求地址
         return resp
 
 

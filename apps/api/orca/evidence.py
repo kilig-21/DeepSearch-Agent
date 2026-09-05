@@ -46,6 +46,24 @@ class LocateResult:
     quote: str | None  # None = 校验失败;否则为实际原文片段(空白规范化)
 
 
+@dataclass
+class CandidateEvidence:
+    """reader 产出的候选证据(quote 已通过 locate_quote 校验, §3.2)。
+
+    不直接写 evidence 池、不发 note 事件——由 merger 集中合并编号。
+    """
+    url: str
+    title: str
+    domain: str
+    source_type: str
+    quote: str         # 实际原文片段(空白规范化)
+    point: str         # 该页要点(报告素材)
+    content_hash: str  # 抓取正文哈希(多站转载分组判定)
+    # 以下由 merger 赋值;reader 产出时为 None(§3.2)
+    evidence_id: str | None = None
+    origin_group_id: str | None = None
+
+
 def _anchors_of(nq: str, size: int = 10) -> list[str]:
     if len(nq) <= size:
         return [nq]

@@ -1,0 +1,62 @@
+"""merger(计划书 §3.2/§3.3):集中合并节点。
+
+- URL 归一化去重(跨轮也去重)
+- 多站转载:content_hash 相同 → 共享 origin_group_id(表达"同一来源";
+  独立来源计数按组判定, 不按 URL 数量)
+- evidence_id 任务内稳定:ev_NNN 递增, 生成后永不重排
+- note 事件由 graph 层在合并后发送(merger 本身保持纯函数)
+"""
+from __future__ import annotations
+
+from .evidence import CandidateEvidence
+from .urls import norm_url
+
+
+def _next_seq(existing: list[CandidateEvidence]) -> int:
+    """续接已有编号(Phase 2 多轮调用时旧 ID 永不重排)。"""
+    max_seq = 0
+    for e in existing:
+        try:
+            max_seq = max(max_seq, int(e.evidence_id.removeprefix("ev_")))
+        except (AttributeError, ValueError):
+            continue
+    return max_seq
+
+
+def merge_candidates(
+    existing: list[CandidateEvidence],
+    candidates: list[CandidateEvidence],
+) -> list[CandidateEvidence]:
+    """合并新候选入池, 返回**新增**的记录(已带 evidence_id / origin_group_id)。"""
+    seen_urls = {norm_url(e.url) for e in existing}
+    group_by_hash: dict[str, str] = {
+        e.content_hash: e.origin_group_id
+        for e in existing if e.origin_group_id
+    }
+    seq = _next_seq(existing)
+
+    added: list[CandidateEvidence] = []
+    for c in candidates:
+        try:
+            key = norm_url(c.url)
+        except ValueError:
+            continue  # 无法归一化的 URL 丢弃
+        if key in seen_urls:
+            continue
+        seen_urls.add(key)
+
+        group = group_by_hash.get(c.content_hash)
+        if group is None:
+            seq += 1
+            group = f"og_{c.content_hash[:12]}_{seq:03d}"
+            group_by_hash[c.content_hash] = group
+
+        seq += 1
+        added.append(CandidateEvidence(
+            url=c.url, title=c.title, domain=c.domain,
+            source_type=c.source_type, quote=c.quote, point=c.point,
+            content_hash=c.content_hash,
+            evidence_id=f"ev_{seq:03d}",
+            origin_group_id=group,
+        ))
+    return added

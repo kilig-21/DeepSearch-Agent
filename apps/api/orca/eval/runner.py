@@ -15,6 +15,7 @@ import re
 from pathlib import Path
 
 from .. import cli, db
+from ..config import DB_PATH
 from ..extract import ExtractError, ExtractedPage
 from ..llm import LLM_DAILY_MODEL, LLM_HIGH_QUALITY_MODEL
 from .materials import MATERIALS
@@ -23,7 +24,9 @@ from . import safety
 
 PROMPT_VERSION = "phase1a-v1"  # graph.py 内各节点提示词版本(改动需递增)
 BASELINES_DIR = Path(__file__).resolve().parents[2] / "eval" / "baselines"
-EVAL_DB = Path(__file__).resolve().parents[2] / "data" / "eval.db"
+# 评测任务落日常库(§5): 复核者直接查 data/orca.db 追溯 task/sources/
+# evidences(quote/fetched_at);评测库分离曾致复核时查无此任务
+EVAL_DB = DB_PATH
 
 
 def quality_denominator(row: dict) -> bool:
@@ -148,6 +151,17 @@ def run_question(q: Question, *, db_path, builder, collector: dict) -> int:
 
     citation_map = state.get("citation_map") or {}
     report_md = state.get("report_md") or ""
+    # evidences 快照(§10.1/§5): 断言的 evidence_ids 须可追溯到 quote
+    evidences = [{
+        "evidence_id": e.evidence_id,
+        "quote": e.quote,
+        "source_type": e.source_type,
+        "url": e.url,
+        "title": e.title,
+        "point": e.point,
+        "origin_group_id": e.origin_group_id,
+        "fetched_at": e.fetched_at,
+    } for e in state.get("evidence", [])]
     row = {
         "qid": q.qid, "qtype": q.qtype, "mode": q.mode, "topic": q.topic,
         "task_id": task_id, "report_id": out.get("report_id"),
@@ -158,6 +172,7 @@ def run_question(q: Question, *, db_path, builder, collector: dict) -> int:
         "citation_map": citation_map,
         "valid_citation_ratio": _valid_citation_ratio(report_md, citation_map),
         "report_md": report_md,
+        "evidences": evidences,
         "events": events,
         "eval_time": _dt.datetime.now().isoformat(timespec="seconds"),
         "models": {"daily": LLM_DAILY_MODEL,

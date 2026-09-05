@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from datetime import datetime
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import TypedDict
@@ -226,7 +227,8 @@ def make_reader(tools: GraphTools):
                     url=page.url, title=result.title, domain=domain,
                     source_type=stype, quote=locate.quote,
                     point=str(p.get("point", ""))[:500],
-                    content_hash=_hash_text(page.text)))
+                    content_hash=_hash_text(page.text),
+                    fetched_at=datetime.now().isoformat(timespec="seconds")))
                 added_for_page += 1
             if added_for_page == 0:
                 tools.emit("warning", {"stage": "reader",

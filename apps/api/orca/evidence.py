@@ -59,6 +59,7 @@ class CandidateEvidence:
     quote: str         # 实际原文片段(空白规范化)
     point: str         # 该页要点(报告素材)
     content_hash: str  # 抓取正文哈希(多站转载分组判定)
+    fetched_at: str | None = None  # 抓取时间 ISO(§10.1 轨迹可追溯)
     # 以下由 merger 赋值;reader 产出时为 None(§3.2)
     evidence_id: str | None = None
     origin_group_id: str | None = None

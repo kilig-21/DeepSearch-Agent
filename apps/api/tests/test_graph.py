@@ -95,6 +95,18 @@ def happy_llm_sides():
             WRITER_REPORT]
 
 
+def test_evidence_carries_fetched_at():
+    """reader 产出的证据带抓取时间戳(§10.1 轨迹可追溯: 断言的
+    evidence_ids 须能经 run 快照/落库追溯 quote 与抓取时间)。"""
+    tools, _e, _c = make_tools(happy_llm_sides(),
+                               search_results=default_search_results())
+    state = asyncio.run(graph.run_research(tools, "Q", task_id="t_fat"))
+    assert state["evidence"]
+    for ev in state["evidence"]:
+        assert ev.fetched_at  # ISO 时间戳
+        assert "T" in ev.fetched_at or " " in ev.fetched_at
+
+
 def test_happy_path_single_pass():
     tools, events, calls = make_tools(happy_llm_sides(),
                                       search_results=default_search_results())

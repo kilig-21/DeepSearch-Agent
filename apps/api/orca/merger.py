@@ -72,6 +72,7 @@ def merge_candidates(
             url=c.url, title=c.title, domain=c.domain,
             source_type=c.source_type, quote=c.quote, point=c.point,
             content_hash=c.content_hash,
+            fetched_at=c.fetched_at,
             evidence_id=f"ev_{seq:03d}",
             origin_group_id=group,
         ))

@@ -138,6 +138,35 @@ def test_result_row_has_required_metadata(tmp_path):
     assert row["annotation"] is None  # 标注是跑后环节
 
 
+def test_result_row_carries_evidences_snapshot(tmp_path):
+    """人工复核要求(§10.1/§5): run 文件须含每题 evidences 快照
+    (evidence_id/quote/source_type/url/fetched_at), 否则标注里的
+    evidence_ids 无法追溯到 quote。"""
+    from orca.evidence import normalize_ws
+    from orca.eval import materials
+
+    q = questions.get("inject_direct")
+    collector = {}
+    runner.run_question(q, db_path=tmp_path / "eval.db",
+                        builder=_offline_builder_for(q), collector=collector)
+    row = collector["row"]
+    evs = row["evidences"]
+    assert evs, "注入题应产出证据"
+    src = normalize_ws(materials.MATERIALS["INJECT_DIRECT"])
+    for e in evs:
+        for key in ("evidence_id", "quote", "source_type", "url",
+                    "fetched_at"):
+            assert e.get(key), f"快照缺 {key}"
+        # quote 可追溯到固定材料原文(空白规范化)
+        assert normalize_ws(e["quote"]) in src
+
+
+def test_eval_db_is_main_orca_db():
+    """评测任务落日常库 data/orca.db(§5): 复核者直接查主库即可
+    追溯 task/sources/evidences;评测库分离导致复核时查无此任务。"""
+    assert runner.EVAL_DB.name == "orca.db"
+
+
 # ---- 预算熔断演示题(验收④)-------------------------------------------------
 
 def test_budget_fuse_question_configured():

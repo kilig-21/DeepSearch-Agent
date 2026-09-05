@@ -55,6 +55,7 @@ export interface WarningPayload {
 export interface ReportDeltaPayload {
   md: string;
   draft: boolean;
+  replace?: boolean; // 修订帧: 整体替换草稿(第四轮评审 P2/P3)
 }
 
 export interface DonePayload {
@@ -94,6 +95,7 @@ export interface ReportDetail {
   created_at: string;
   evidences: {
     evidence_id: string;
+    source_id: number; // → sources 联查真实 URL(F3 引用链接契约)
     quote: string;
     origin_group_id: string | null;
     source_type: string;

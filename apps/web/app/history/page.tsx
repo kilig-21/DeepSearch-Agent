@@ -4,6 +4,7 @@
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { ReportView } from "@/components/research/report-view";
+import { resolveCitationUrls } from "@/lib/citations";
 import type { ReportDetail } from "@/lib/types";
 
 const API = process.env.NEXT_PUBLIC_API_BASE ?? "http://localhost:8000";
@@ -96,7 +97,7 @@ export default function HistoryPage() {
           </p>
           <ReportView
             markdown={detail.final_md}
-            citationMap={detail.citation_map_json}
+            citationUrls={resolveCitationUrls(detail)}
             title="研究报告"
           />
         </section>

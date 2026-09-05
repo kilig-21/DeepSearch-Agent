@@ -10,7 +10,7 @@ import { useTask } from "@/lib/use-task";
 import { isTerminal } from "@/lib/types";
 
 export default function ResearchPage() {
-  const { view, start, cancel } = useTask();
+  const { view, start, cancel, retryFinalReport } = useTask();
   const [topic, setTopic] = useState("");
 
   const taskActive =
@@ -89,16 +89,41 @@ export default function ResearchPage() {
       {/* 报告区: 落库后取正式版替换草稿 */}
       {view.finalReport !== null ? (
         <section className="rounded border border-green-200 p-4">
+          {view.finalLoadFailed ? (
+            <p className="mb-2 flex items-center gap-2 text-xs text-amber-700">
+              报告详情(引用链接)获取失败, 当前展示任务自带正文。
+              <button
+                type="button"
+                className="rounded border border-amber-300 bg-amber-50 px-2 py-0.5 font-medium hover:bg-amber-100"
+                onClick={() => void retryFinalReport()}
+              >
+                重试
+              </button>
+            </p>
+          ) : null}
           <ReportView
             markdown={view.finalReport}
-            citationMap={view.citationMap}
+            citationUrls={view.citationUrls}
             title="研究报告"
           />
+        </section>
+      ) : view.finalLoadFailed ? (
+        <section className="rounded border border-amber-300 bg-amber-50 p-4">
+          <p className="flex items-center gap-2 text-sm text-amber-800">
+            正式报告获取失败。
+            <button
+              type="button"
+              className="rounded border border-amber-400 bg-white px-2 py-0.5 font-medium hover:bg-amber-100"
+              onClick={() => void retryFinalReport()}
+            >
+              重试
+            </button>
+          </p>
         </section>
       ) : view.draftReport ? (
         <section className="rounded border border-dashed border-gray-300 p-4">
           <p className="mb-2 text-xs text-gray-500">草稿(流式生成中…)</p>
-          <ReportView markdown={view.draftReport} citationMap={view.citationMap} />
+          <ReportView markdown={view.draftReport} citationUrls={view.citationUrls} />
         </section>
       ) : null}
     </main>

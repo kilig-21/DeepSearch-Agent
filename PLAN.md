@@ -139,7 +139,7 @@
 | 网页转文本 | Jina Reader 免费档(配额限制见 §8)+ 自建兜底 | 省去自写解析 |
 | 搜索 API | Tavily 免费档(计费规则见 §8);**备胎:`ddgs`**(DuckDuckGo,免费无 key 但非官方、随时可能失效,仅限开发调试) | 免费额度够个人开发;搜索为可插拔接口 |
 | 网页转文本 | **Defuddle(本地 CLI,主力,v1.2.1)**;兜底分层:Python 侧 httpx+trafilatura → Jina Reader(云服务)→ 动态页 Playwright(重,按需引入,不进 MVP 主链路) | 本地提取**内容不出机器**(合规友好,见 §9.1)、无配额、已验证安装(0.19.3);Jina 仅在本地提取失败时兜底 |
-| LLM | **glm-4-flash(Phase 0 定版,免费)** + `LLMClient` 薄协议;高质量备选 glm-4.6 | 不做多厂商统一网关 |
+| LLM | **日常 glm-5.3-flash / 高质量 glm-5.3(用户定版 2026-09-05)** + `LLMClient` 薄协议;两者实测可调(3.1~3.6s);⚠️ 5.3 为推理型模型,max_tokens 须覆盖思考段;价格以 [open.bigmodel.cn/pricing](https://open.bigmodel.cn/pricing) 为准 | 不做多厂商统一网关 |
 | 数据库 | SQLite + SQLAlchemy | 零运维;任务/报告/来源/证据全部落库 |
 | 部署 | 前端 Vercel / 后端本地或一台轻量 VPS | 成本≈0 |
 
@@ -502,10 +502,10 @@ GET  /api/health
 | 任务耗用算例 | Basic:3轮×4查询=12 credits → `floor(1000/12)=83` 任务/月;Advanced 24 credits **超出 16 上限,不适用**。预算分账:若给开发/评测预留 500 credits,正式任务容量 `floor(500/12)=41` 个 | 自算(公式附 §3.6) |
 | Jina Reader(v1.2.1 降为兜底) | 新 key **一次性** 10M 免费 tokens(非每月重赠);无 key Reader 20 RPM;兜底用量小,可不注册,需要时再办 | [jina.ai/reader](https://jina.ai/reader/) |
 | Claude Sonnet 5 | 输入 $2/M、输出 $10/M;算例:每任务输入 10 万+输出 1 万 ≈ **$0.30/任务**(未含搜索抓取) | [platform.claude.com/docs/en/about-claude/pricing](https://platform.claude.com/docs/en/about-claude/pricing) |
-| LLM(Phase 0 定版) | **日常:glm-4-flash(免费)** — 实测 3.9~4.6s、3 句摘要 70 tokens;高质量备选 glm-4.6(实测 5.7s,收费,单价以 [open.bigmodel.cn/pricing](https://open.bigmodel.cn/pricing) 为准);glm-4.5-flash 不采用(22s 且截断) | 探针实测(apps/api/docs/probe_results.md) |
+| LLM(定版 2026-09-05) | **日常 glm-5.3-flash / 高质量 glm-5.3(用户定版)** — 实测可调,延迟 3.1~3.6s;⚠️ 5.3 为推理型模型,max_tokens=100 时 content 为空(思考即耗尽),接入时须给足输出上限;早期探针:glm-4-flash 3.9s/70 tokens(已被替换)、glm-4.5-flash 不采用(22s);价格以 [open.bigmodel.cn/pricing](https://open.bigmodel.cn/pricing) 为准 | 实测(apps/api/docs/probe_results.md) |
 | VPS | ¥20~40/月为**预算假设**(未指定商家/规格/续费条件) | — |
 
-**预算结论(Phase 0 实测后更新,2026-09-05)**:LLM 定版 glm-4-flash(**免费**)后,LLM 费用 ≈ ¥0;30~50 正式任务 + 等量重跑的搜索量 720~1200 credits **可能超 Tavily 免费档**,需分账预留。**实测月成本目标 ≈ ¥0~40**(仅托管/超额 credits),优于 v1.2 的 ¥30~100 上限(该估计含付费 LLM 情形)。
+**预算结论(2026-09-05,模型定版 glm-5.3 系列后)**:LLM 费用取决于 5.3 系列定价(**待核定价页**;若 flash 档免费则 ≈ ¥0,另注意推理型模型思考 token 也计费,单任务 token 消耗高于 4 系列);30~50 正式任务 + 等量重跑的搜索量 720~1200 credits **可能超 Tavily 免费档**,需分账预留。**月成本目标 ≈ ¥0~40**(仅托管/超额 credits),Phase 1A 成本日志上线后以实测校准。
 
 配套:调用上限熔断 Phase 1A 实现;Jina 20 RPM 需限速 + 429 退避;三账分开(LLM/Tavily/Jina)。
 

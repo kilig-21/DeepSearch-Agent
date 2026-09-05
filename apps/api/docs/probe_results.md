@@ -1,5 +1,15 @@
 # Phase 0 探针实测记录(2026-09-05)
 
+## ⭐ 定版变更(2026-09-05,用户决定)
+
+- 日常模型:glm-4-flash → **glm-5.3-flash**;高质量:glm-4.6 → **glm-5.3**
+- 实测:两模型均可调,延迟 **3.13~3.59s**
+- ⚠️ 关键工程发现:**5.3 为推理型模型**——max_tokens=100 时 content 为空(token 全部用于思考)。Phase 1A 的 LLM 调用必须给足 max_tokens(或配置思考预算),且**思考 token 计入计费与预算分账**
+- 价格未实测:以 [open.bigmodel.cn/pricing](https://open.bigmodel.cn/pricing) 为准,Phase 1A 成本日志上线后校准
+- 下方为 Phase 0 探针历史数据(4 系列),保留作回归参照
+
+
+
 > 环境:Windows 11 / Python 3.13.14 / Node v24.16.0 / 用户全局代理开启
 
 ## T3 搜索(Tavily Basic + ddgs 备胎)

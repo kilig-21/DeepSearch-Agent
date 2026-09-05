@@ -14,6 +14,7 @@ TAVILY_API_KEY = os.environ.get("TAVILY_API_KEY", "")
 ZHIPU_CHAT_URL = "https://open.bigmodel.cn/api/paas/v4/chat/completions"
 TAVILY_SEARCH_URL = "https://api.tavily.com/search"
 
-# Phase 0 默认模型(实测后定版,回填 PLAN.md §8)
-LLM_DAILY_MODEL = "glm-4-flash"      # 日常迭代/跑量
-LLM_PROBE_MODELS = ["glm-4-flash", "glm-4.5-flash", "glm-4.6"]
+# LLM 定版(2026-09-05 用户定版: 5.3 系列; 详见 PLAN.md §8)
+LLM_DAILY_MODEL = "glm-5.3-flash"    # 日常迭代/跑量
+LLM_HIGH_QUALITY_MODEL = "glm-5.3"   # 高质量模式(最终报告)
+LLM_PROBE_MODELS = ["glm-5.3-flash", "glm-5.3"]

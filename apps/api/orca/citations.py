@@ -107,7 +107,7 @@ def revise_report(
         f"{report_md}"
     )
     result = chat([{"role": "user", "content": prompt}], max_tokens=max_tokens,
-                  tier="daily")
+                  tier="daily", reasoning_effort="low")  # 机械改写, 压制思考省配额
     fixed = result.content or report_md
     recheck = check_report(fixed, evidences)
     if recheck.valid:

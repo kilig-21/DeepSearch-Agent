@@ -3,7 +3,7 @@
 - 定版模型(2026-09-05):日常 glm-5.3-flash / 高质量 glm-5.3
 - glm-5.3 为推理型模型:思考段耗尽输出配额 → max_tokens 为必填且须给足
 - usage 原样上报, 思考 token 计入预算分账(probe_results.md 定版变更)
-- 重试 ≤2(§3.6), 仅对可重试错误(网络/429/5xx);单调用超时 30s
+- 重试 ≤2(§3.6), 仅对可重试错误(网络/429/5xx);单调用超时 180s(推理型校准)
 """
 from __future__ import annotations
 
@@ -19,7 +19,9 @@ from .config import (
 )
 
 MAX_RETRIES = 2       # 每调用重试上限(§3.6)
-DEFAULT_TIMEOUT = 30.0
+# §3.6 原回填 30s 基于 4 系列(4~6s);glm-5.3 推理型思考段远超此值,
+# Phase 1A 冒烟实测 30s ReadTimeout, 校准为 180s(计划书值将在验收后回填)
+DEFAULT_TIMEOUT = 180.0
 
 Tier = str  # "daily" | "high_quality"
 
@@ -74,6 +76,7 @@ class LLMClient:
         max_tokens: int,  # 必填:5.3 推理模型思考段占用输出配额, 禁止静默默认小值
         tier: Tier = "daily",
         temperature: float = 0.2,
+        reasoning_effort: str | None = None,
     ) -> LLMResult:
         payload = {
             "model": self._model_for(tier),
@@ -81,6 +84,12 @@ class LLMClient:
             "temperature": temperature,
             "max_tokens": max_tokens,
         }
+        # 思考控制(实测 2026-09-05):5.3 系列始终思考, thinking.type 不接受
+        # disabled/low/high/max(智谱 1210 错误);顶层 reasoning_effort="low"
+        # 是唯一实测将思考压到 0 的方式(OpenAI 风格兼容参数)。
+        # None = 不传字段 = 模型默认思考(writer 推理任务保留)。
+        if reasoning_effort is not None:
+            payload["reasoning_effort"] = reasoning_effort
         headers = {"Authorization": f"Bearer {self._api_key}"}
         last_err: Exception | None = None
         for attempt in range(self._max_retries + 1):

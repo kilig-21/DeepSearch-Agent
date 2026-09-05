@@ -115,3 +115,44 @@ def test_reasoning_tokens_counted_in_usage():
     r = client.chat([{"role": "user", "content": "hi"}], max_tokens=4096)
     assert r.usage["completion_tokens"] == 2586  # 含思考段, 原样上报
     assert r.usage["total_tokens"] == 2757
+
+
+def test_default_timeout_covers_reasoning_models():
+    """5.3 推理型模型思考段远超 4 系列的 4~6s, 30s 会 ReadTimeout
+    (Phase 1A 冒烟实测)。默认超时须按推理型模型校准。"""
+    post = make_post([FakeResponse(200, OK_PAYLOAD)])
+    client = llm.LLMClient(api_key="k", url="u", post=post)
+    client.chat([{"role": "user", "content": "hi"}], max_tokens=1024)
+    assert post.calls[0]["timeout"] >= 180
+
+
+def test_no_reasoning_effort_field_by_default():
+    """默认不传 reasoning_effort:writer 保留模型默认思考(推理任务需要)。"""
+    post = make_post([FakeResponse(200, OK_PAYLOAD)])
+    client = make_client(post)
+    client.chat([{"role": "user", "content": "hi"}], max_tokens=8192)
+    assert "reasoning_effort" not in post.calls[0]["json"]
+    assert "thinking" not in post.calls[0]["json"]  # 5.3 不接受 thinking.type 值
+
+
+def test_reasoning_effort_low_disables_thinking():
+    """reader/planner 等机械任务压制思考:思考段曾吃满 4096 输出配额
+    导致 content 为空(Phase 1A 诊断), 且思考 token 计费。
+
+    实测(2026-09-05):glm-5.3-flash 始终思考, thinking.type 不接受
+    disabled/low/high/max;顶层 reasoning_effort="low" 是唯一实测能将
+    思考压到 0 的方式(OpenAI 风格兼容参数)。
+    """
+    post = make_post([FakeResponse(200, OK_PAYLOAD)])
+    client = make_client(post)
+    client.chat([{"role": "user", "content": "hi"}], max_tokens=2048,
+                reasoning_effort="low")
+    assert post.calls[0]["json"]["reasoning_effort"] == "low"
+
+
+def test_reasoning_effort_value_passthrough():
+    post = make_post([FakeResponse(200, OK_PAYLOAD)])
+    client = make_client(post)
+    client.chat([{"role": "user", "content": "hi"}], max_tokens=2048,
+                reasoning_effort="high")
+    assert post.calls[0]["json"]["reasoning_effort"] == "high"

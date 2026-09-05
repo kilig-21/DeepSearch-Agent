@@ -54,7 +54,7 @@ def test_degrade_replaces_invalid_citation_without_deleting_claim():
 def test_revise_report_uses_llm_once_then_validates():
     calls = []
 
-    def fake_chat(messages, *, max_tokens, tier):
+    def fake_chat(messages, *, max_tokens, tier, reasoning_effort=None):
         calls.append((messages, max_tokens, tier))
         return type("R", (), {"content": GOOD, "usage": {
             "prompt_tokens": 100, "completion_tokens": 50,
@@ -67,7 +67,7 @@ def test_revise_report_uses_llm_once_then_validates():
 
 
 def test_revise_report_falls_back_to_degrade():
-    def bad_chat(messages, *, max_tokens, tier):
+    def bad_chat(messages, *, max_tokens, tier, reasoning_effort=None):
         return type("R", (), {"content": "仍含 [7] 的坏报告", "usage": {
             "prompt_tokens": 100, "completion_tokens": 50,
             "total_tokens": 150}})()

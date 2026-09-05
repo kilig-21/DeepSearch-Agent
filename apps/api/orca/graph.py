@@ -111,7 +111,8 @@ def make_planner(tools: GraphTools):
                   f"并给出 1 个首轮搜索查询。只输出 JSON:"
                   f'{{"sub_questions": ["..."], "query": "..."}}\n\n'
                   f"用户问题: {state['topic']}"}],
-                max_tokens=_READER_MAX_TOKENS, tier="daily")
+                max_tokens=_READER_MAX_TOKENS, tier="daily",
+                reasoning_effort="low")  # 机械拆解任务, 压制思考省配额
         except Exception as e:  # noqa: BLE001
             tools.emit("warning", {"stage": "planner",
                                    "detail": f"规划失败: {e}"})
@@ -201,7 +202,8 @@ def make_reader(tools: GraphTools):
             try:
                 result_llm = tools.llm_chat(
                     [{"role": "user", "content": prompt}],
-                    max_tokens=_READER_MAX_TOKENS, tier="daily")
+                    max_tokens=_READER_MAX_TOKENS, tier="daily",
+                    reasoning_effort="low")  # 机械摘录任务, 压制思考省配额
             except Exception as e:  # noqa: BLE001
                 tools.emit("warning", {"stage": "reader",
                                        "detail": f"摘要失败 {result.url}: {e}"})

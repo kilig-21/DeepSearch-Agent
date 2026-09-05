@@ -46,7 +46,7 @@ def make_tools(llm_sides, search_results=None, fetch_failures=None,
     calls = {"llm": [], "fetch": [], "search": []}
     usage = {"prompt_tokens": 100, "completion_tokens": 50, "total_tokens": 150}
 
-    def llm_chat(messages, *, max_tokens, tier):
+    def llm_chat(messages, *, max_tokens, tier, reasoning_effort=None):
         calls["llm"].append({"tier": tier, "max_tokens": max_tokens,
                              "messages": messages})
         content = llm_sides.pop(0)

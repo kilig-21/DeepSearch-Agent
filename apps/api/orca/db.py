@@ -96,7 +96,10 @@ class SearchRound(Base):
 
 
 def make_engine(db_path: Path | str):
-    return create_engine(f"sqlite:///{db_path}")
+    p = Path(db_path)
+    if p.parent and not p.parent.exists():
+        p.parent.mkdir(parents=True, exist_ok=True)
+    return create_engine(f"sqlite:///{p}")
 
 
 def init_db(engine) -> None:

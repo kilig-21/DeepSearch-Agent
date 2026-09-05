@@ -6,7 +6,7 @@
 
 | 来源 | 域名 | 内容许可 | 条款/许可链接 | 核验日期 | 允许范围与备注 |
 |---|---|---|---|---|---|
-| 维基百科(中文) | `zh.wikipedia.org` | CC BY-SA 4.0(内容重用需署名+相同方式共享) | [Wikimedia Terms of Use](https://foundation.wikimedia.org/wiki/Policy:Terms_of_Use) | 2026-09-05 | 允许程序化访问与引用;报告引用时给出来源链接与作者署名 |
+| 维基百科(中文) | `zh.wikipedia.org` | CC BY-SA 4.0(内容重用需署名+相同方式共享) | [Wikimedia Terms of Use](https://foundation.wikimedia.org/wiki/Policy:Terms_of_Use) | 2026-09-05 | ⚠️ **可达性备注(Phase 0 实测)**:直连环境 DNS 被污染(解析出 `2001::1`),会被 safe_fetch 拦截;需代理环境访问。报告引用时给出来源链接与作者署名 |
 | Python 官方文档 | `docs.python.org` | PSF License Version 2(允许再分发,保留声明) | [Python License](https://docs.python.org/3/license.html) | 2026-09-05 | 允许引用与摘录;无需抓取频率说明,仍遵守限速(≤5 并发) |
 | MDN Web Docs(中文) | `developer.mozilla.org` | CC BY-SA 2.5(内容重用需署名+相同方式共享) | [MDN 内容许可](https://developer.mozilla.org/en-US/docs/MDN/Writing_guidelines/Attribution_copyright_license) | 2026-09-05 | 允许引用与摘录;以页面页脚许可声明为准 |
 

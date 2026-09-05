@@ -4,8 +4,8 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-# 项目根 = apps/api 的上两级
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
+# 项目根 = Orca/(config.py 位于 Orca/apps/api/orca/ 下, 上溯 3 级)
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
 load_dotenv(PROJECT_ROOT / ".env")
 
 ZHIPU_API_KEY = os.environ.get("ZHIPU_API_KEY", "")

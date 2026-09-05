@@ -31,7 +31,8 @@ def via_defuddle(url: str) -> tuple[str, float]:
         return "(defuddle 未找到)", 0.0
     t0 = time.perf_counter()
     proc = subprocess.run(
-        [exe, "parse", url, "--md"], capture_output=True, text=True, timeout=60, shell=False
+        [exe, "parse", url, "--md"], capture_output=True, timeout=60, shell=False,
+        encoding="utf-8", errors="replace",  # Windows 默认 GBK 会炸 UTF-8 输出
     )
     dt = time.perf_counter() - t0
     return (proc.stdout.strip() if proc.returncode == 0 else f"(失败 rc={proc.returncode}: {proc.stderr[:120]})", dt)

@@ -139,7 +139,7 @@
 | 网页转文本 | Jina Reader 免费档(配额限制见 §8)+ 自建兜底 | 省去自写解析 |
 | 搜索 API | Tavily 免费档(计费规则见 §8);**备胎:`ddgs`**(DuckDuckGo,免费无 key 但非官方、随时可能失效,仅限开发调试) | 免费额度够个人开发;搜索为可插拔接口 |
 | 网页转文本 | **Defuddle(本地 CLI,主力,v1.2.1)**;兜底分层:Python 侧 httpx+trafilatura → Jina Reader(云服务)→ 动态页 Playwright(重,按需引入,不进 MVP 主链路) | 本地提取**内容不出机器**(合规友好,见 §9.1)、无配额、已验证安装(0.19.3);Jina 仅在本地提取失败时兜底 |
-| LLM | 默认一个模型(DeepSeek 或 GLM,Phase 0 实测定版)+ `LLMClient` 薄协议 | 不做多厂商统一网关 |
+| LLM | **glm-4-flash(Phase 0 定版,免费)** + `LLMClient` 薄协议;高质量备选 glm-4.6 | 不做多厂商统一网关 |
 | 数据库 | SQLite + SQLAlchemy | 零运维;任务/报告/来源/证据全部落库 |
 | 部署 | 前端 Vercel / 后端本地或一台轻量 VPS | 成本≈0 |
 
@@ -319,16 +319,16 @@ data: {"task_id":"t_xxx","ts":"...","round":1,"query":"...","results":[...]}
 
 **初始限制值(v1.3 恢复 v1.2 缺失项;标注"待回填"的必须 Phase 0 回填,其余实测后可调)**:
 
-| 限制 | 初始值 |
+| 限制 | 初始值(**Phase 0 实测回填,2026-09-05**;探针记录见 `apps/api/docs/probe_results.md`) |
 |---|---|
-| 总时长 | **≤ 8 分钟** |
+| 总时长 | **≤ 8 分钟**(实测单任务全链路 ~15s,余量充足) |
 | 抓取页数 | **≤ 12** |
 | 每调用重试 | **≤ 2 次** |
-| 单任务 LLM tokens | ≤ 200k(待回填) |
-| 单页字符 | ≤ 100k(待回填) |
-| Jina 兜底单任务 token 上限 | (待回填) |
-| 单调用超时 | (待回填) |
-| 最大重定向次数 | (待回填) |
+| 单任务 LLM tokens | **≤ 50k**(实测单页摘要任务 2,757 tokens;按 12 页+反思+writer 上浮,Phase 1A 校准) |
+| 单页字符 | **≤ 100k**(实测最大单页 70k) |
+| Jina 兜底单任务 token 上限 | 默认关闭;启用时 ≤ 500k 并校准 |
+| 单调用超时 | LLM **30s** / 抓取 **20s**(实测 GLM 4~6s、Tavily 4~6s、提取 ~5s) |
+| 最大重定向次数 | **3**(已在 `orca/fetch.py` 实现) |
 | Tavily credits | ≤ 16 硬上限(含计费重试) |
 
 **Tavily 口径**:默认 **Basic**(1 credit/次),3 轮 × 4 查询计划消耗 12 credits;**Advanced**(2 credit/次)入同一账户,16 上限下最多 8 次,**不保证完成 12 查询**;Reader/Jina/本地抓取不消耗 Tavily credits;MVP 不用 Tavily Extract(启用须单独入账)。
@@ -367,6 +367,7 @@ data: {"task_id":"t_xxx","ts":"...","round":1,"query":"...","results":[...]}
 - LLM 模型定版(实测价格与质量,回填 §8);**回填 §3.6 全部占位值**(LLM token/单页字符/Jina token 上限/单调用超时/最大重定向次数)
 - **建立外部服务条款记录表(v1.2)**:实际采用的服务(Jina/Tavily/LLM)逐个记录条款链接、核验日期、发送内容、保留/训练设置、缓存与再发布限制(模板见 §9.1)
 - **验收**:命令行跑通"搜索→抓一篇→摘要",记录实测成本;§3.6 与 §8 无占位符
+- **结果(2026-09-05,已完成)**:✅ 全链路验收通过(~15s,1 credit + 2,757 tokens 免费模型);LLM 定版 **glm-4-flash**;提取主力定版 **trafilatura**(比 Defuddle 更干净);SSRF 单测 18/18;实测数据见 `apps/api/docs/probe_results.md`;来源集合见 `docs/SOURCES.md`
 
 ### Phase 1A — 线性链路 + 质量与安全基线(约 3~5 周,v1.2 拆分)
 
@@ -501,10 +502,10 @@ GET  /api/health
 | 任务耗用算例 | Basic:3轮×4查询=12 credits → `floor(1000/12)=83` 任务/月;Advanced 24 credits **超出 16 上限,不适用**。预算分账:若给开发/评测预留 500 credits,正式任务容量 `floor(500/12)=41` 个 | 自算(公式附 §3.6) |
 | Jina Reader(v1.2.1 降为兜底) | 新 key **一次性** 10M 免费 tokens(非每月重赠);无 key Reader 20 RPM;兜底用量小,可不注册,需要时再办 | [jina.ai/reader](https://jina.ai/reader/) |
 | Claude Sonnet 5 | 输入 $2/M、输出 $10/M;算例:每任务输入 10 万+输出 1 万 ≈ **$0.30/任务**(未含搜索抓取) | [platform.claude.com/docs/en/about-claude/pricing](https://platform.claude.com/docs/en/about-claude/pricing) |
-| DeepSeek / GLM | 待 Phase 0 选定模型后实测回填 | — |
+| LLM(Phase 0 定版) | **日常:glm-4-flash(免费)** — 实测 3.9~4.6s、3 句摘要 70 tokens;高质量备选 glm-4.6(实测 5.7s,收费,单价以 [open.bigmodel.cn/pricing](https://open.bigmodel.cn/pricing) 为准);glm-4.5-flash 不采用(22s 且截断) | 探针实测(apps/api/docs/probe_results.md) |
 | VPS | ¥20~40/月为**预算假设**(未指定商家/规格/续费条件) | — |
 
-**预算结论(v1.2 修正表述)**:30~50 个正式任务 + 等量重跑(60~100 次执行)→ 模型费约 $18~30,Basic 搜索 720~1200 credits(**可能超免费额度,需预留分账**)。**¥30~100/月 是待 Phase 0 实测验证的预算目标**,不是从算例直接得出的结论。
+**预算结论(Phase 0 实测后更新,2026-09-05)**:LLM 定版 glm-4-flash(**免费**)后,LLM 费用 ≈ ¥0;30~50 正式任务 + 等量重跑的搜索量 720~1200 credits **可能超 Tavily 免费档**,需分账预留。**实测月成本目标 ≈ ¥0~40**(仅托管/超额 credits),优于 v1.2 的 ¥30~100 上限(该估计含付费 LLM 情形)。
 
 配套:调用上限熔断 Phase 1A 实现;Jina 20 RPM 需限速 + 429 退避;三账分开(LLM/Tavily/Jina)。
 
@@ -542,6 +543,7 @@ GET  /api/health
 | 报告引用失效 | 中 | sources 不可变快照保存来源元数据与哈希,**quote 存于 evidences 表**(v1.3 修正措辞),失效仍可展示 |
 | LangGraph 学习曲线 | 中 | Phase 1 线性图(节点即普通函数);注意 channel 覆盖语义 |
 | token 成本失控 | 低 | §3.6 分账预算 + 成本日志 |
+| DNS 污染/代理环境(**Phase 0 实测发现**) | 中 | 直连下 wikipedia 解析出假地址 `2001::1`,safe_fetch 公网校验**按设计拦截**;Phase 1A 落实 §3.7 代理模式解析权;来源集合标注可达性(docs/SOURCES.md) |
 | Jina/搜索 429 限速 | 低 | 限速 + 指数退避(§3.6) |
 
 ---

@@ -10,7 +10,9 @@ from .budget import Budget
 
 
 def persist_task_results(engine, task_id: str, state: dict, budget: Budget | None,
-                         *, allowed_domains: set[str], proxy: bool) -> int:
+                         *, allowed_domains: set[str], proxy: bool) -> int | None:
+    """返回 report_id;任务已被取消/失败抢先终态时返回 None(后到结果丢弃,
+    第四轮评审 P6),调用方不得再发 done。"""
     source_id_by_url: dict[str, int] = {}
     for ev in state.get("evidence", []):
         if ev.url not in source_id_by_url:

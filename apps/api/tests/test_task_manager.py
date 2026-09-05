@@ -9,11 +9,13 @@
 """
 import json
 import threading
+import time
 
 import pytest
 
 from orca import db
 from orca.llm import LLMResult
+from orca.persist import persist_task_results
 from orca.task_manager import ActiveTaskExists, TaskManager
 from tests.test_graph import (
     PLANNER_JSON,
@@ -337,6 +339,98 @@ def test_snapshot_after_cancel_hides_draft(tmp_path):
     assert snap["status"] == "cancelled"
     assert snap["stop_reason"] == "user_cancelled"
     assert snap["report_md"] == ""
+
+
+# ---- P5/P6: 终态发布窗口与取消/完成竞争(测试类5) ----------------------------
+
+def test_completed_persist_loses_race_to_cancel(tmp_path):
+    """P6:取消侧先提交终态 → persist 条件更新未命中, 报告一并回滚、
+    后到结果丢弃、不发 done;"cancelled 后 completed 覆盖"必须消失。"""
+    engine = db.make_engine(tmp_path / "o.db")
+    db.init_db(engine)
+
+    def builder(budget):
+        tools, _e, _c = make_tools(happy_llm_sides(),
+                                   search_results=default_search_results())
+        tools.budget = budget
+        return tools
+
+    def racing_persist(engine_, task_id, state, budget, **kw):
+        # 模拟取消侧在 worker 提交 completed 之前已落库 cancelled
+        db.cancel_task(engine_, task_id, stop_reason="user_cancelled")
+        return persist_task_results(engine_, task_id, state, budget, **kw)
+
+    mgr = _make_manager(engine, builder, persist_fn=racing_persist)
+    task_id = mgr.create("Q")
+    assert mgr.wait(task_id, timeout=10)
+
+    task = db.get_task(engine, task_id)
+    assert task["status"] == "cancelled"          # completed 不得覆盖
+    assert task["stop_reason"] == "user_cancelled"
+    assert task["report_id"] is None
+    with engine.connect() as conn:
+        count = conn.exec_driver_sql(
+            "SELECT COUNT(*) FROM reports WHERE task_id = ?",
+            (task_id,)).scalar()
+    assert count == 0                             # 报告写入已回滚
+    events = mgr.events_after(task_id, 0)
+    assert not any(e.event == "done" for e in events)  # 后到结果不发 done
+    assert events[-1].event == "cancelled"
+
+
+def test_terminal_record_atomic_under_concurrent_events(tmp_path):
+    """P5:终态提交(标志+状态+seq+缓冲)同一临界区——并发事件线程下
+    seq 连续无交错、终态事件恰一条且可读(旧实现锁外 _record 会丢号)。"""
+    engine = db.make_engine(tmp_path / "o.db")
+    db.init_db(engine)
+    mgr = _make_manager(engine, lambda budget: None)
+    runtime = mgr._runtime_for_test(task_id="t_p5", topic="Q")
+    stop = threading.Event()
+
+    def spam():
+        i = 0
+        while not stop.is_set():
+            mgr._record(runtime, "progress", {"n": i})
+            i += 1
+
+    t = threading.Thread(target=spam, daemon=True)
+    t.start()
+    try:
+        time.sleep(0.02)
+        mgr._record_terminal(runtime, "cancelled",
+                             {"stop_reason": "user_cancelled"})
+    finally:
+        stop.set()
+        t.join(5)
+
+    events = mgr.events_after("t_p5", 0)
+    seqs = [e.seq for e in events]
+    assert seqs == list(range(seqs[0], seqs[0] + len(seqs)))  # 连续无交错丢号
+    assert [e.event for e in events].count("cancelled") == 1  # 终态恰一条
+    assert runtime.terminal_recorded is True
+    assert runtime.status == "cancelled"
+    cancelled = [e for e in events if e.event == "cancelled"][0]
+    # 标志可见时终态事件已可读;终态 seq 之后的序号只可能属于并发 in-flight
+    assert cancelled.seq <= runtime.seq
+    assert runtime.buffer[-1].seq == runtime.seq  # 缓冲与 seq 一致
+
+
+def test_terminal_event_visible_before_flag_when_subscribed(tmp_path):
+    """P5:订阅者在终态提交后必须能读到终态事件——标志先行可见导致
+    SSE 提前关闭丢事件的窗口不存在。"""
+    engine = db.make_engine(tmp_path / "o.db")
+    db.init_db(engine)
+    mgr = _make_manager(engine, lambda budget: None)
+    runtime = mgr._runtime_for_test(task_id="t_p5b", topic="Q")
+
+    # 借真实锁读路径模拟 SSE drain:标志可见后 events_after 必含终态事件
+    mgr._record_terminal(runtime, "done", {"report_id": 1,
+                                           "stop_reason": "single_pass"})
+    assert runtime.terminal_recorded is True
+    events = mgr.events_after("t_p5b", 0)
+    assert events, "终态事件必须可读"
+    assert events[-1].event == "done"
+    assert events[-1].seq == runtime.seq
 
 
 def test_recover_interrupted_delegates_to_db(tmp_path):

@@ -12,7 +12,7 @@ import uuid
 from datetime import UTC, datetime
 from pathlib import Path
 
-from sqlalchemy import ForeignKey, String, UniqueConstraint, create_engine, select
+from sqlalchemy import ForeignKey, String, UniqueConstraint, create_engine, select, update
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column
 
 
@@ -144,12 +144,20 @@ def complete_task_with_report(
     credits_cost: int,
     duration_s: float,
     usage: dict,
-) -> int:
-    """报告与 tasks 终态在同一个事务内提交(§3.4);提交前不发任何终态事件。"""
+) -> int | None:
+    """报告与 tasks 终态同事务**条件**提交(§3.4; 第四轮评审 P6)。
+
+    仅当任务仍为 running 才流转为 completed(原子 UPDATE ... WHERE
+    status='running');未抢到终态提交权(已被取消/失败)→ 报告写入
+    一并回滚, 返回 None, 后到结果由调用方丢弃。终态一旦提交不得覆盖。
+    """
     with Session(engine) as session, session.begin():
+        task = session.get(Task, task_id)
+        if task is None or task.status != "running":
+            return None  # 已是终态: 不写报告, 后到结果丢弃
         report = Report(
             task_id=task_id,
-            topic="",
+            topic=task.topic,
             final_md=final_md,
             citation_map_json=json.dumps(citation_map, ensure_ascii=False),
             stop_reason=stop_reason,
@@ -160,12 +168,16 @@ def complete_task_with_report(
         )
         session.add(report)
         session.flush()  # 取 report.id
-        task = session.get(Task, task_id)
-        report.topic = task.topic
-        task.status = "completed"
-        task.stop_reason = stop_reason
-        task.report_id = report.id
-        task.usage_json = json.dumps(usage, ensure_ascii=False)
+        # 条件更新(防 TOCTOU):与取消/失败竞争时只有一个事务能命中
+        res = session.execute(
+            update(Task)
+            .where(Task.id == task_id, Task.status == "running")
+            .values(status="completed", stop_reason=stop_reason,
+                    report_id=report.id,
+                    usage_json=json.dumps(usage, ensure_ascii=False)))
+        if res.rowcount == 0:
+            session.rollback()  # 未抢到 → 报告随事务回滚(P6)
+            return None
         return report.id
 
 

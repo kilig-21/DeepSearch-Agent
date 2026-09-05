@@ -79,6 +79,13 @@ def cmd_research(topic: str, *, db_path=None, tools_builder=default_tools_builde
         report_id = persist_task_results(
             engine, task_id, state, budget,
             allowed_domains=set(ALLOWED_DOMAINS), proxy=FETCH_PROXY is not None)
+        if report_id is None:
+            # CLI 无并发取消源, 理论不可达;防御: 终态已被抢先时按取消收尾(P6)
+            db.cancel_task(engine, task_id)
+            if out is not None:
+                out.update(task_id=task_id)
+            console_emit("cancelled", {})
+            return 130
         if out is not None:
             # 评测 runner 经此取回本次任务结果; 禁止用 list_tasks()[-1]
             # (并发写入同一 DB 时会拿错行)

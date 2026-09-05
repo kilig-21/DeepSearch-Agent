@@ -191,6 +191,10 @@ class TaskManager:
                 self._engine, task_id, state, budget,
                 allowed_domains=tools.allowed_domains,
                 proxy=tools.proxy is not None)
+            if report_id is None:
+                # 未抢到终态提交权(已被取消/失败抢先)→ 后到结果丢弃,
+                # 不发 done(P6);取消侧负责 cancelled 收尾
+                raise TaskCancelled
             runtime.report_id = report_id
             self._record_terminal(runtime, "done", {
                 "report_id": report_id,
@@ -228,6 +232,12 @@ class TaskManager:
         return emit
 
     def _record(self, runtime: TaskRuntime, event: str, payload: dict) -> None:
+        with self._lock:
+            self._record_locked(runtime, event, payload)
+
+    def _record_locked(self, runtime: TaskRuntime, event: str,
+                       payload: dict) -> None:
+        """须持 self._lock 调用:seq/缓冲/进度/订阅推送一次临界区完成(P5)。"""
         self._track_progress(runtime, event, payload)
         runtime.seq += 1
         record = EventRecord(
@@ -253,18 +263,20 @@ class TaskManager:
 
     def _record_terminal(self, runtime: TaskRuntime, event: str,
                          payload: dict) -> None:
-        """终态唯一:第一个终态事件生效, 后到者丢弃(§3.4)。"""
+        """终态唯一 + 原子发布(§3.4; 第四轮评审 P5):terminal 标志、
+        状态、seq、缓冲事件、订阅推送在同一锁临界区内一次完成——
+        终态事件可被读到之前, terminal 标志不可能先行可见。"""
         with self._lock:
             if runtime.terminal_recorded:
                 return
             runtime.terminal_recorded = True
-        status = {"done": "completed", "task_failed": "failed",
-                  "cancelled": "cancelled"}[event]
-        runtime.status = status
-        runtime.stop_reason = payload.get("stop_reason") or runtime.stop_reason
-        if event != "done":
-            runtime.draft_md = ""  # 非完成终态: 草稿不作为内容暴露
-        self._record(runtime, event, payload)
+            status = {"done": "completed", "task_failed": "failed",
+                      "cancelled": "cancelled"}[event]
+            runtime.status = status
+            runtime.stop_reason = payload.get("stop_reason") or runtime.stop_reason
+            if event != "done":
+                runtime.draft_md = ""  # 非完成终态: 草稿不作为内容暴露
+            self._record_locked(runtime, event, payload)
 
     def _publish(self, runtime: TaskRuntime, record: EventRecord) -> None:
         for sub in list(runtime.subscribers.values()):

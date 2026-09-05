@@ -61,6 +61,24 @@ def test_fail_task_records_terminal_state(engine):
     assert task["stop_reason"] == "execution_error"
 
 
+def test_cancel_task_marks_cancelled(engine):
+    task_id = db.create_task(engine, topic="x")
+    db.cancel_task(engine, task_id)
+
+    task = db.get_task(engine, task_id)
+    assert task["status"] == "cancelled"
+    assert task["stop_reason"] == "user_cancelled"
+
+
+def test_terminal_states_never_overwritten(engine):
+    """最终状态一旦提交, 后续不得覆盖(§3.4 原子状态转移)。"""
+    task_id = db.create_task(engine, topic="x")
+    db.cancel_task(engine, task_id)
+    db.fail_task(engine, task_id, stop_reason="execution_error")
+
+    assert db.get_task(engine, task_id)["status"] == "cancelled"
+
+
 def test_mark_stale_interrupted_only_touches_running(engine):
     keep_running = db.create_task(engine, topic="遗留任务")
     done = db.create_task(engine, topic="已完成")

@@ -1,0 +1,175 @@
+"""命令行入口(计划书 §6):`python -m orca <subcommand>`。
+
+- research <topic>:创建任务 → 线性链路 → 报告与任务同事务落库 → done
+- cleanup:本地数据清理(须在后端停止后执行, §6/§9.1)
+"""
+from __future__ import annotations
+
+import argparse
+import sys
+import time
+
+from . import db
+from .budget import Budget
+from .config import (
+    ALLOWED_DOMAINS,
+    BUDGET_MAX_PAGES,
+    BUDGET_MAX_TAVILY_CREDITS,
+    BUDGET_TIME_S,
+    BUDGET_TOTAL_LLM_TOKENS,
+    BUDGET_WRITER_RESERVE_TOKENS,
+    DB_PATH,
+    FETCH_PROXY,
+)
+from .events import console_emit
+from .graph import GraphTools, run_research
+
+
+def _make_budget() -> Budget:
+    return Budget(
+        total_llm_tokens=BUDGET_TOTAL_LLM_TOKENS,
+        writer_reserve_tokens=BUDGET_WRITER_RESERVE_TOKENS,
+        max_tavily_credits=BUDGET_MAX_TAVILY_CREDITS,
+        max_pages=BUDGET_MAX_PAGES,
+        time_budget_s=BUDGET_TIME_S,
+        max_jina_tokens=0,  # Jina 兜底默认关闭(§3.6)
+    )
+
+
+def default_tools_builder(budget: Budget) -> GraphTools:
+    """真实组件组装;测试注入替代 builder。"""
+    from .extract import fetch_and_extract_async
+    from .llm import LLMClient
+    from .search import TavilySearch
+
+    llm = LLMClient()
+    tavily = TavilySearch()
+
+    def search_fn(query: str, *, limit: int):
+        return tavily.search(query, limit=limit)
+
+    async def fetch_async(url: str, *, allowed_domains=None, proxy=None):
+        return await fetch_and_extract_async(
+            url, allowed_domains=allowed_domains or ALLOWED_DOMAINS,
+            proxy=proxy or FETCH_PROXY)
+
+    return GraphTools(
+        llm_chat=llm.chat, search_fn=search_fn, fetch_async=fetch_async,
+        budget=budget, emit=console_emit,
+        allowed_domains=set(ALLOWED_DOMAINS), proxy=FETCH_PROXY,
+    )
+
+
+def _persist(engine, task_id: str, state: dict) -> int:
+    """evidences/sources/search_rounds 落库 + 报告与终态同事务提交(§3.4)。"""
+    source_id_by_url: dict[str, int] = {}
+    for ev in state.get("evidence", []):
+        if ev.url not in source_id_by_url:
+            source_id_by_url[ev.url] = db.record_source(
+                engine, task_id, url=ev.url, title=ev.title, domain=ev.domain,
+                source_type=ev.source_type, content_hash=ev.content_hash,
+                origin_group_id=ev.origin_group_id)
+        db.record_evidence(engine, task_id, evidence_id=ev.evidence_id,
+                           source_id=source_id_by_url[ev.url],
+                           origin_group_id=ev.origin_group_id,
+                           source_type=ev.source_type, quote=ev.quote,
+                           validated=True)
+    for r in state.get("search_rounds", []):
+        db.record_search_round(engine, task_id, round_no=r["round_no"],
+                               query=r["query"],
+                               result_count=r["result_count"],
+                               credits_used=r["credits_used"])
+
+    budget = _current_budget
+    usage = budget.usage_snapshot() if budget else {
+        "llm_tokens": 0, "tavily_credits": 0, "jina_tokens": 0}
+    return db.complete_task_with_report(
+        engine, task_id,
+        final_md=state.get("report_md", ""),
+        citation_map=state.get("citation_map", {}),
+        stop_reason=state.get("stop_reason") or "single_pass",
+        config_json={"allowed_domains": sorted(ALLOWED_DOMAINS),
+                     "proxy": bool(FETCH_PROXY)},
+        token_cost=usage["llm_tokens"],
+        credits_cost=usage["tavily_credits"],
+        duration_s=state.get("duration_s", 0.0),
+        usage=usage,
+    )
+
+
+_current_budget: Budget | None = None
+
+
+def cmd_research(topic: str, *, db_path=None, tools_builder=default_tools_builder) -> int:
+    global _current_budget
+    engine = db.make_engine(db_path or DB_PATH)
+    db.init_db(engine)
+    db.mark_stale_interrupted(engine)  # 启动时遗留 running → interrupted(§3.4)
+
+    task_id = db.create_task(engine, topic=topic)
+    budget = _make_budget()
+    _current_budget = budget
+
+    t0 = time.monotonic()
+    try:
+        tools = tools_builder(budget)
+        state = _run(tools, topic, task_id)
+        state["duration_s"] = time.monotonic() - t0
+        report_id = _persist(engine, task_id, state)
+        console_emit("done", {
+            "report_id": report_id, "stop_reason": state.get("stop_reason"),
+            "token_cost": budget.usage_snapshot()["llm_tokens"],
+            "credits_cost": budget.usage_snapshot()["tavily_credits"],
+            "duration_s": state["duration_s"],
+        })
+        return 0
+    except KeyboardInterrupt:
+        db.cancel_task(engine, task_id)
+        console_emit("cancelled", {})
+        return 130
+    except Exception as e:  # noqa: BLE001
+        db.fail_task(engine, task_id, stop_reason="execution_error")
+        console_emit("task_failed", {"detail": f"{type(e).__name__}: {e}"})
+        return 1
+
+
+def _run(tools: GraphTools, topic: str, task_id: str) -> dict:
+    import asyncio
+    return asyncio.run(run_research(tools, topic, task_id=task_id))
+
+
+def cmd_cleanup(*, db_path=None, assume_yes: bool = False) -> int:
+    path = db_path or DB_PATH
+    if not assume_yes:
+        answer = input(f"将清空 {path} 中 tasks/reports/sources/evidences/"
+                       "search_rounds 全部数据, 确认? [y/N] ")
+        if answer.strip().lower() != "y":
+            print("已取消")
+            return 1
+    engine = db.make_engine(path)
+    db.init_db(engine)
+    db.cleanup(engine)
+    print(f"已清空 {path}")
+    return 0
+
+
+def main(argv=None) -> int:
+    parser = argparse.ArgumentParser(prog="orca",
+                                     description="Orca Research(Deep Search 研究助手)")
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    p_research = sub.add_parser("research", help="执行一次研究任务")
+    p_research.add_argument("topic", help="研究问题")
+
+    sub.add_parser("cleanup", help="清空本地研究数据(后端停止后执行)")
+
+    args = parser.parse_args(argv)
+    if args.command == "research":
+        return cmd_research(args.topic)
+    if args.command == "cleanup":
+        return cmd_cleanup()
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main())

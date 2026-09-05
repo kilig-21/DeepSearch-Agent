@@ -18,3 +18,21 @@ TAVILY_SEARCH_URL = "https://api.tavily.com/search"
 LLM_DAILY_MODEL = "glm-5.3-flash"    # 日常迭代/跑量
 LLM_HIGH_QUALITY_MODEL = "glm-5.3"   # 高质量模式(最终报告)
 LLM_PROBE_MODELS = ["glm-5.3-flash", "glm-5.3"]
+
+# 数据库(本地自用; data/ 不进版本库)
+DB_PATH = PROJECT_ROOT / "data" / "orca.db"
+
+# 允许抓取的来源集合(docs/SOURCES.md 逐站核对; 集合外不抓正文, §4/§9.1)
+ALLOWED_DOMAINS = {"docs.python.org", "developer.mozilla.org",
+                   "zh.wikipedia.org"}
+
+# 抓取代理(§3.7):默认直连;显式设置 FETCH_PROXY 环境变量启用代理模式
+# (代理模式下由代理方解析目标, 本地 IP 校验不适用, 依赖白名单防线)
+FETCH_PROXY = os.environ.get("FETCH_PROXY") or None
+
+# 预算初始值(§3.6, Phase 0 实测回填; Phase 1A 实测后校准)
+BUDGET_TOTAL_LLM_TOKENS = 50_000
+BUDGET_WRITER_RESERVE_TOKENS = 8_000
+BUDGET_MAX_TAVILY_CREDITS = 16
+BUDGET_MAX_PAGES = 12
+BUDGET_TIME_S = 480.0  # 总时长 ≤8 分钟

@@ -167,10 +167,19 @@ def complete_task_with_report(
 
 
 def fail_task(engine, task_id: str, *, stop_reason: str) -> None:
+    _set_terminal(engine, task_id, status="failed", stop_reason=stop_reason)
+
+
+def cancel_task(engine, task_id: str, *, stop_reason: str = "user_cancelled") -> None:
+    _set_terminal(engine, task_id, status="cancelled", stop_reason=stop_reason)
+
+
+def _set_terminal(engine, task_id: str, *, status: str, stop_reason: str) -> None:
+    """终态转移:仅 running 可流转, 最终状态一旦提交不得覆盖(§3.4)。"""
     with Session(engine) as session, session.begin():
         task = session.get(Task, task_id)
         if task and task.status == "running":
-            task.status = "failed"
+            task.status = status
             task.stop_reason = stop_reason
 
 
@@ -256,3 +265,19 @@ def list_search_rounds(engine, task_id: str) -> list[dict]:
         return [{"round_no": r.round_no, "query": r.query,
                  "result_count": r.result_count, "credits_used": r.credits_used}
                 for r in rows]
+
+
+def list_tasks(engine) -> list[dict]:
+    with Session(engine) as session:
+        rows = session.scalars(select(Task).order_by(Task.created_at)).all()
+        return [_task_dict(t) for t in rows]
+
+
+def list_evidences(engine, task_id: str) -> list[dict]:
+    with Session(engine) as session:
+        rows = session.scalars(select(Evidence).where(
+            Evidence.task_id == task_id)).all()
+        return [{"evidence_id": e.evidence_id, "source_id": e.source_id,
+                 "quote": e.quote, "validated": e.validated,
+                 "origin_group_id": e.origin_group_id,
+                 "source_type": e.source_type} for e in rows]

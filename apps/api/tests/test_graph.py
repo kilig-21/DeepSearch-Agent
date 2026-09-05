@@ -104,7 +104,7 @@ def test_evidence_carries_fetched_at():
     assert state["evidence"]
     for ev in state["evidence"]:
         assert ev.fetched_at  # ISO 时间戳
-        assert "T" in ev.fetched_at or " " in ev.fetched_at
+        assert ev.fetched_at.endswith("+00:00")  # 与 db._now 一致用 UTC
 
 
 def test_happy_path_single_pass():

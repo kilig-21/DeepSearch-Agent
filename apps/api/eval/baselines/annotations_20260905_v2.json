@@ -1,7 +1,7 @@
 {
-  "run_file": "run_20260905_185400.json",
-  "annotated_by": "claude-AI初标(2026-09-05), 供人工复核; 档位定义见 §10.2",
-  "annotated_at": "2026-09-05T19:00:00",
+  "run_file": "run_20260905_201120.json",
+  "annotated_by": "claude-AI初标(2026-09-05), 供人工复核; 档位定义见 §10.2; evidence_ids 可经 run 文件 evidences 快照或 orca.db (evidences JOIN sources)追溯到 quote 原文",
+  "annotated_at": "2026-09-05T20:30:00",
   "questions": [
     {
       "qid": "fact_mdn401",
@@ -21,7 +21,7 @@
       "qid": "budget_fuse",
       "coverage": [],
       "assertions": [],
-      "na_reason": "熔断演示题: 研究额度 100 < planner 实测 155 tokens → budget_exhausted, writer 程序说明收尾(§3.6 两级规则)",
+      "na_reason": "熔断演示题: 研究额度 100 < planner 单次消耗 → budget_exhausted, writer 程序说明收尾(§3.6 两级规则)",
       "conflict_handling": null
     },
     {
@@ -35,17 +35,17 @@
         {
           "point": "属于实验性特性",
           "mark": "covered",
-          "note": ""
+          "note": "[ev_004] 原文'实验性地支持'"
         },
         {
           "point": "默认构建不启用, 需专用可执行文件/构建选项",
           "mark": "covered",
-          "note": "安装器可选安装 + --disable-gil + sys._is_gil_enabled() 检查均有据"
+          "note": ""
         }
       ],
       "assertions": [
         {
-          "text": "核心特征是禁用全局解释器锁, 使线程能在可用的 CPU 核心上并行运行",
+          "text": "自由线程化执行允许线程在可用的 CPU 核心上并行运行",
           "mark": "support",
           "evidence_ids": [
             "ev_001",
@@ -54,15 +54,15 @@
           "note": ""
         },
         {
-          "text": "在 3.13 的官方文档中该能力被定性为实验性支持",
+          "text": "3.13 版本的官方文档将该支持定性为'实验性'",
           "mark": "support",
           "evidence_ids": [
-            "ev_001"
+            "ev_004"
           ],
           "note": ""
         },
         {
-          "text": "默认未启用, 需安装器可选安装或源码构建选项",
+          "text": "默认未启用: 官方安装器可选安装 / 源码构建需 --disable-gil",
           "mark": "support",
           "evidence_ids": [
             "ev_002",
@@ -71,10 +71,10 @@
           "note": ""
         },
         {
-          "text": "3.13 文档指出 pyperformance 开销约 40%",
+          "text": "3.13 中 pyperformance 套件开销约为 40%",
           "mark": "support",
           "evidence_ids": [
-            "ev_003"
+            "ev_006"
           ],
           "note": ""
         }
@@ -83,7 +83,7 @@
         "identified": 1,
         "explained": 1,
         "wrongly_merged": 0,
-        "note": "识别 [3] 40% vs [6] 1~8% 性能数据冲突,写入局限性并说明无法裁定原因, 未错误合并"
+        "note": "识别 [6] 40% vs [3] 要点 1~8% 性能数据分歧, 局限性说明证据池不足以解释原因, 正文采用明确针对 3.13 的 [6] 数据, 未错误合并"
       }
     },
     {
@@ -91,23 +91,23 @@
       "coverage": [
         {
           "point": "http.client 是更底层的 HTTP 协议客户端",
-          "mark": "covered",
-          "note": ""
+          "mark": "partial",
+          "note": "本轮 http.client 自身页面未入证据池, 仅经 [ev_002] 间接推断; 报告局限性如实声明'只能得到间接证据支持'"
         },
         {
           "point": "urllib.request 是基于 http.client 之上的更高层封装",
           "mark": "covered",
-          "note": ""
+          "note": "[ev_002] urlopen 返回 http.client.HTTPResponse 对象"
         },
         {
           "point": "两者适用场景差异(自定义协议处理 vs 直接发请求)",
           "mark": "partial",
-          "note": "报告比较了定位层次; 适用场景建议证据未覆盖, 报告局限性已如实说明"
+          "note": "报告明确'http.client 侧信息缺失', 无法完整对比"
         }
       ],
       "assertions": [
         {
-          "text": "http.client 被定位为 HTTP/HTTPS 协议的底层客户端实现, 通常不直接使用",
+          "text": "urllib.request 被官方定位为'可扩展的 URL 打开库', 处理认证/重定向/Cookie 等复杂场景",
           "mark": "support",
           "evidence_ids": [
             "ev_001"
@@ -115,29 +115,28 @@
           "note": ""
         },
         {
-          "text": "urllib.request 被定位为更高层的可扩展 URL 打开库, 处理认证/重定向/cookies",
+          "text": "urlopen 对 HTTP/HTTPS URL 返回 http.client.HTTPResponse 对象, 说明 urllib.request 构建在 http.client 之上",
           "mark": "support",
           "evidence_ids": [
-            "ev_004"
+            "ev_002"
           ],
           "note": ""
         },
         {
-          "text": "urlopen 对 HTTP/HTTPS URL 返回 http.client.HTTPResponse 对象",
+          "text": "官方文档建议更高层 HTTP 客户端需求使用第三方 Requests 包",
           "mark": "support",
           "evidence_ids": [
-            "ev_006"
+            "ev_003"
           ],
           "note": ""
         },
         {
-          "text": "两个模块的官方文档均推荐 Requests 包作为更高层接口",
-          "mark": "support",
+          "text": "http.client 处于更靠近 HTTP 响应实现的位置",
+          "mark": "partial",
           "evidence_ids": [
-            "ev_002",
-            "ev_005"
+            "ev_002"
           ],
-          "note": ""
+          "note": "单向间接推断, 报告局限性已声明结论边界"
         }
       ],
       "conflict_handling": null
@@ -147,31 +146,32 @@
       "coverage": [
         {
           "point": "3.13 中自由线程为实验性(Phase I)",
-          "mark": "partial",
-          "note": "证据无'实验性'标签直接表述(报告局限性已声明), 只能支撑'3.13 引入'"
+          "mark": "covered",
+          "note": "[ev_001][ev_002] 原文直接表述'实验性'"
         },
         {
-          "point": "3.14 中的支持状态描述",
+          "point": "3.14 中的支持状态描述(官方支持程度/Phase II)",
           "mark": "partial",
-          "note": "经已知限制章节/行为变化侧面描述; 无官方支持等级直接证据"
+          "note": "本轮未抓到 3.14 文档原文, 只有 3.13 文档的前瞻计划 [ev_003]; 报告明确'无法构成对 3.14 文档实际内容的已核实比较'"
         },
         {
           "point": "指出两版本文档口径差异并分别给出依据",
-          "mark": "covered",
-          "note": "'Starting with' vs 'As of' 措辞差异 + 内容重心差异, 各有依据"
+          "mark": "partial",
+          "note": "3.13 侧有据; 3.14 侧证据缺失, 报告诚实声明不可比较而非编造"
         }
       ],
       "assertions": [
         {
-          "text": "自 3.13 起 CPython 提供禁用 GIL 的自由线程构建",
+          "text": "3.13 文档将自由线程定位为实验性支持, 构建禁用 GIL",
           "mark": "support",
           "evidence_ids": [
-            "ev_001"
+            "ev_001",
+            "ev_002"
           ],
           "note": ""
         },
         {
-          "text": "3.14 相关描述设有专门已知限制章节, 记录了行为变化",
+          "text": "自由线程模式是实验性的, 改进工作进行中, 预计出现错误且单线程性能受较大影响",
           "mark": "support",
           "evidence_ids": [
             "ev_002"
@@ -179,24 +179,22 @@
           "note": ""
         },
         {
-          "text": "对 3.13 侧重'是否提供、如何获得', 对 3.14 侧重'当前限制与行为语义的界定'",
-          "mark": "partial",
+          "text": "3.13 文档对 3.14 给出的是改进方向(重新启用 PEP 659 等)而非已实现状态",
+          "mark": "support",
           "evidence_ids": [
-            "ev_001",
-            "ev_002",
             "ev_003"
           ],
-          "note": "分析性结论, 与证据一致但属报告解释"
+          "note": ""
         },
         {
-          "text": "证据来源单一(全部出自 3.14.7 同一页面), 无法证明 3.13 当时文档的表述",
+          "text": "全部证据出自 3.13.15 文档, 未含 3.14 文档原文, 无法核实 3.14 文档的实际描述",
           "mark": "support",
           "evidence_ids": [
             "ev_001",
             "ev_002",
             "ev_003"
           ],
-          "note": "报告诚实声明, 属局限性而非编造"
+          "note": "诚实声明, 属局限性而非编造"
         }
       ],
       "conflict_handling": null
@@ -212,41 +210,40 @@
         {
           "point": "给出依据(文档页/发布说明)",
           "mark": "covered",
-          "note": "文档首页自述 [ev_004]"
+          "note": "中英文档首页自述相互印证 [ev_001][ev_004]"
         },
         {
           "point": "说明该结论的时效边界",
           "mark": "covered",
-          "note": "局限性'快照时效性'明确声明"
+          "note": "局限性声明'无法排除后续版本可能性'"
         }
       ],
       "assertions": [
         {
-          "text": "docs.python.org 记录的最新稳定版本是 Python 3.14.7",
-          "mark": "support",
-          "evidence_ids": [
-            "ev_004",
-            "ev_005",
-            "ev_006"
-          ],
-          "note": ""
-        },
-        {
-          "text": "changelog 的 'Python next' 小节是未正式发布版本的开发中记录, 不影响结论",
+          "text": "docs.python.org 记录并展示的最新稳定版本为 Python 3.14.7",
           "mark": "support",
           "evidence_ids": [
             "ev_001",
-            "ev_003"
+            "ev_004"
           ],
           "note": ""
         },
         {
-          "text": "页面内容产生于 2025-2026 年左右的开发阶段",
-          "mark": "partial",
+          "text": "3.14 系列是文档站点当前作为稳定版本维护介绍的系列",
+          "mark": "support",
           "evidence_ids": [
-            "ev_002"
+            "ev_002",
+            "ev_005"
           ],
-          "note": "由 CVE 2026-*/gh-15 万+ 编号推断, 合理但属推断"
+          "note": ""
+        },
+        {
+          "text": "Changelog 构建自 Misc/NEWS.d, 可用于确认最新稳定版本",
+          "mark": "support",
+          "evidence_ids": [
+            "ev_007"
+          ],
+          "note": ""
         }
       ],
       "conflict_handling": null
@@ -257,7 +254,7 @@
         {
           "point": "对'是否有完整中文翻译'给出有据结论(找不到即如实说明)",
           "mark": "covered",
-          "note": "结论'未提供', 基于核查页面均为英文的观察"
+          "note": "结论'未提供', 并声明只能得出'无证据表明存在'"
         },
         {
           "point": "不编造不存在的翻译页面",
@@ -271,12 +268,13 @@
           "mark": "partial",
           "evidence_ids": [
             "ev_004",
+            "ev_005",
             "ev_006"
           ],
-          "note": "证据支撑'核查页面未见中文'; '整站未提供'超出观察范围, 报告局限性自认"
+          "note": "证据支撑'核查页面未见中文入口'; '整站未提供'超出观察范围, 报告局限性自认'无法穷尽性证明不存在'"
         },
         {
-          "text": "PEP 695 相关内容(类型参数语法/type 语句/泛型)存在于官方文档且为英文",
+          "text": "PEP 695 相关内容(类型参数语法/type 语句)在官方文档以英文呈现",
           "mark": "support",
           "evidence_ids": [
             "ev_001",
@@ -286,10 +284,10 @@
           "note": ""
         },
         {
-          "text": "官方文档提供 PEP 索引入口",
+          "text": "PEP 以英文原文形式收录于 Python Enhancement Proposals 索引",
           "mark": "support",
           "evidence_ids": [
-            "ev_005"
+            "ev_006"
           ],
           "note": ""
         }
@@ -312,15 +310,15 @@
       ],
       "assertions": [
         {
-          "text": "Python 3.13 于 2024 年 10 月正式发布",
+          "text": "Python 3.13 于 2024 年 10 月发布",
           "mark": "support",
           "evidence_ids": [
-            "ev_002"
+            "ev_001"
           ],
           "note": ""
         },
         {
-          "text": "自由线程模式为实验性质且默认不启用",
+          "text": "自由线程模式属实验性质, 需专用构建 python3.13t 且默认不启用",
           "mark": "support",
           "evidence_ids": [
             "ev_001",
@@ -329,7 +327,7 @@
           "note": ""
         },
         {
-          "text": "移除 19 个陈旧标准库模块, 首次引入实验性 JIT 编译器",
+          "text": "移除 19 个陈旧标准库模块('死电池'计划)",
           "mark": "support",
           "evidence_ids": [
             "ev_003"

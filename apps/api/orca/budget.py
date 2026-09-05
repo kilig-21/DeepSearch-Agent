@@ -58,15 +58,18 @@ class Budget:
         return self._writer_reserved
 
     # ---- LLM 账 ----------------------------------------------------------
-    def charge_llm(self, tokens: int, *, for_writer: bool) -> bool:
-        """按调用实际 usage 入账;writer 调用可用预留, 研究调用不可。"""
+    def settle_llm(self, tokens: int, *, for_writer: bool) -> bool:
+        """按调用实际 usage 结算入账(§3.6:原子预占, 完成后按实际 usage 结算)。
+
+        usage 是已发生的事实, 总是记账;返回 False 表示本次已越过对应额度
+        (writer 调用可用预留, 研究调用不可), 调用方据此停止后续调用。
+        调用前的资格判断用 research_exhausted()/total_exhausted()/out_of_time()。
+        """
         if tokens < 0:
             raise ValueError("tokens 不能为负")
         limit = self.total_llm_tokens if for_writer else self.research_llm_limit()
-        if self.used_llm_tokens + tokens > limit:
-            return False
         self.used_llm_tokens += tokens
-        return True
+        return self.used_llm_tokens <= limit
 
     def research_llm_limit(self) -> int:
         return self.total_llm_tokens - self.writer_reserve_tokens

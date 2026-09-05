@@ -28,30 +28,30 @@ def test_writer_reserve_established_once():
 
 def test_research_calls_cannot_touch_writer_reserve():
     b = make_b(total_llm=10_000, reserve=2_000)
-    assert b.charge_llm(8_000, for_writer=False) is True
-    # 第 8001 个 token 起将挤占 writer 预留 → 拒绝
-    assert b.charge_llm(1, for_writer=False) is False
-    assert b.used_llm_tokens == 8_000
+    assert b.settle_llm(8_000, for_writer=False) is True
+    # 超过研究额度(挤占 writer 预留):记账(事实)但返回超限, 后续不再调
+    assert b.settle_llm(1, for_writer=False) is False
+    assert b.used_llm_tokens == 8_001         # 实际 usage 必须如实入账
 
 
 def test_writer_calls_may_use_reserve():
     b = make_b(total_llm=10_000, reserve=2_000)
-    b.charge_llm(8_000, for_writer=False)
-    assert b.charge_llm(2_000, for_writer=True) is True
+    b.settle_llm(8_000, for_writer=False)
+    assert b.settle_llm(2_000, for_writer=True) is True
     assert b.used_llm_tokens == 10_000
 
 
 def test_research_exhausted_but_total_still_has_writer_room():
     b = make_b(total_llm=10_000, reserve=2_000)
-    b.charge_llm(8_000, for_writer=False)
+    b.settle_llm(8_000, for_writer=False)
     assert b.research_exhausted() is True    # → stop_reason=budget_exhausted, 走 writer
     assert b.total_exhausted() is False      # 仍可调模型写报告
 
 
 def test_total_exhausted_blocks_even_writer():
     b = make_b(total_llm=10_000, reserve=2_000)
-    b.charge_llm(8_000, for_writer=False)
-    b.charge_llm(2_000, for_writer=True)
+    b.settle_llm(8_000, for_writer=False)
+    b.settle_llm(2_000, for_writer=True)
     assert b.total_exhausted() is True       # → 不再调用任何模型
 
 
@@ -87,7 +87,7 @@ def test_timeout_by_injected_clock():
 
 def test_usage_snapshot_for_db():
     b = make_b()
-    b.charge_llm(2_757, for_writer=False)
+    b.settle_llm(2_757, for_writer=False)
     b.charge_credits(1)
     assert b.usage_snapshot() == {
         "llm_tokens": 2_757, "tavily_credits": 1, "jina_tokens": 0,

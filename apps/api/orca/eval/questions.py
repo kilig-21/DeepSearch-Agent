@@ -123,8 +123,12 @@ QUESTIONS: list[Question] = [
         ],
         materials=[("https://docs.python.org/3/whatsnew/3.13.html", "PY313")],
         budget_overrides={
-            "total_llm_tokens": 3000,
-            "writer_reserve_tokens": 2000,
+            # 实测校准: planner 单次 ~171 tokens(reasoning_effort=low)。
+            # 研究额度 = 350-250 = 100 < 171 → searcher 入口必然熔断,
+            # 稳定演示两级规则(§3.6): 研究额度耗尽 → budget_exhausted,
+            # writer 用预留产出程序说明。
+            "total_llm_tokens": 350,
+            "writer_reserve_tokens": 250,
         },
     ),
 ]

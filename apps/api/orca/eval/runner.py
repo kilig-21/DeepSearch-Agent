@@ -18,7 +18,7 @@ from .. import cli, db
 from ..extract import ExtractError, ExtractedPage
 from ..llm import LLM_DAILY_MODEL, LLM_HIGH_QUALITY_MODEL
 from .materials import MATERIALS
-from .questions import QUESTIONS, Question
+from .questions import QUESTIONS, Question, get
 from . import safety
 
 PROMPT_VERSION = "phase1a-v1"  # graph.py 内各节点提示词版本(改动需递增)
@@ -117,22 +117,30 @@ def _budget_builder_for(q: Question):
         total_llm_tokens=50_000, writer_reserve_tokens=8_000,
         max_tavily_credits=BUDGET_MAX_TAVILY_CREDITS,
         max_pages=BUDGET_MAX_PAGES, time_budget_s=BUDGET_TIME_S,
-        max_jina_tokens=0, **q.budget_overrides)
+        max_jina_tokens=0)
+    kwargs.update(q.budget_overrides)
     return lambda: Budget(**kwargs)
 
 
 def run_question(q: Question, *, db_path, builder, collector: dict) -> int:
-    """跑一题(复用 CLI 全链路: 建任务→图→同事务落库), 组装结果行。"""
+    """跑一题(复用 CLI 全链路: 建任务→图→同事务落库), 组装结果行。
+
+    tokens/credits 从落库的 tasks.usage_json 取(done 事件是 CLI 呈现层,
+    不经过 collector);duration 用评测侧 wall time(含落库, 更真实)。
+    """
+    import time as _time
+
+    t0 = _time.monotonic()
     rc = cli.cmd_research(q.topic, db_path=db_path, tools_builder=builder,
                           budget_builder=_budget_builder_for(q))
+    duration_s = round(_time.monotonic() - t0, 1)
     events = list(getattr(builder, "events", []))
 
     engine = db.make_engine(db_path)
     task = db.list_tasks(engine)[-1]
     report = db.get_report(engine, task["report_id"]) \
         if task["report_id"] else None
-    done = next((e for e in reversed(events) if e["event"] == "done"), None)
-    usage = (done["payload"] if done else {})
+    usage = task["usage_json"] or {}
 
     citation_map = (report["citation_map_json"] if report else {}) or {}
     report_md = (report["final_md"] if report else "") or ""
@@ -140,9 +148,9 @@ def run_question(q: Question, *, db_path, builder, collector: dict) -> int:
         "qid": q.qid, "qtype": q.qtype, "mode": q.mode, "topic": q.topic,
         "task_id": task["id"], "report_id": task["report_id"],
         "status": task["status"], "stop_reason": task["stop_reason"],
-        "tokens": usage.get("token_cost"),
-        "credits": usage.get("credits_cost"),
-        "duration_s": usage.get("duration_s"),
+        "tokens": usage.get("llm_tokens"),
+        "credits": usage.get("tavily_credits"),
+        "duration_s": duration_s,
         "citation_map": citation_map,
         "valid_citation_ratio": _valid_citation_ratio(report_md, citation_map),
         "report_md": report_md,
@@ -162,16 +170,28 @@ def run_question(q: Question, *, db_path, builder, collector: dict) -> int:
 
 
 def main(argv=None) -> int:
+    import argparse
     import sys
 
     for stream in (sys.stdout, sys.stderr):
         if hasattr(stream, "reconfigure"):
             stream.reconfigure(encoding="utf-8", errors="replace")
 
+    parser = argparse.ArgumentParser(prog="orca.eval",
+                                     description="跑 10 题评测集")
+    parser.add_argument("--only", default=None,
+                        help="逗号分隔的 qid 列表(默认全部)")
+    args = parser.parse_args(argv)
+
+    selected = QUESTIONS
+    if args.only:
+        ids = [s.strip() for s in args.only.split(",") if s.strip()]
+        selected = [get(qid) for qid in ids]
+
     EVAL_DB.parent.mkdir(parents=True, exist_ok=True)
     BASELINES_DIR.mkdir(parents=True, exist_ok=True)
     results = []
-    for q in QUESTIONS:
+    for q in selected:
         print(f"\n===== [{q.qid}] {q.topic}")
         builder = (make_online_builder() if q.mode == "online"
                    else make_offline_builder(q))

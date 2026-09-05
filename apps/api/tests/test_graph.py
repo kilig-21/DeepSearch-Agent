@@ -153,7 +153,8 @@ def test_research_budget_fuse_stops_research_but_writes_program_note():
 
     assert state["stop_reason"] == "budget_exhausted"
     assert len(calls["llm"]) == 1               # searcher/reader 未调 LLM
-    assert "未能" in state["report_md"]
+    # §3.4: 程序说明必须说明真实原因(额度耗尽), 不得写成"未找到证据"
+    assert "额度" in state["report_md"]
     assert state["citation_map"] == {}
 
 

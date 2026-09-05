@@ -268,6 +268,7 @@ def _program_note(state: ResearchState, reason: str) -> str:
 
 _REASON_TEXT = {
     "total_budget_exhausted": "任务总额度已耗尽,为控制成本未再调用模型。",
+    "budget_exhausted": "研究额度已耗尽(§3.6 两级预算规则),研究阶段停止。",
     "timeout": "任务超出总时限,研究被强制停止。",
     "execution_error": "研究过程发生程序异常。",
     "no_new_evidence": "未能获取到任何可核实的证据,无法生成有依据的报告。",

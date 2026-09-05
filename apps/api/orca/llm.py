@@ -4,11 +4,14 @@
 - glm-5.3 为推理型模型:思考段耗尽输出配额 → max_tokens 为必填且须给足
 - usage 原样上报, 思考 token 计入预算分账(probe_results.md 定版变更)
 - 重试 ≤2(§3.6), 仅对可重试错误(网络/429/5xx);单调用超时 180s(推理型校准)
+- chat_stream(第四轮评审 P2):SSE 流式, 逐片段产出正文;
+  usage 经 include_usage 在流末尾返回;流式不做重试(草稿可中断)
 """
 from __future__ import annotations
 
+import json
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 
 from .config import (
@@ -112,3 +115,59 @@ class LLMClient:
             if attempt < self._max_retries:
                 self._sleep(0.5 * (2**attempt))  # 指数退避
         raise LLMError(f"重试耗尽({self._max_retries + 1} 次尝试): {last_err}")
+
+    def chat_stream(
+        self,
+        messages: list[dict],
+        *,
+        max_tokens: int,
+        tier: Tier = "daily",
+        temperature: float = 0.2,
+        reasoning_effort: str | None = None,
+    ) -> tuple[Iterator[str], dict]:
+        """流式调用:返回 (正文片段迭代器, usage 容器)。
+
+        片段逐个产出, 调用方可逐片段 emit(取消检查点在 emit 侧);
+        流耗尽后 usage 容器被填充(智谱 OpenAI 风格 include_usage)。
+        流式不做重试:草稿可被取消中断, 失败走 execution_error 兜底。
+        """
+        payload = {
+            "model": self._model_for(tier),
+            "messages": messages,
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+            "stream": True,
+            "stream_options": {"include_usage": True},
+        }
+        if reasoning_effort is not None:
+            payload["reasoning_effort"] = reasoning_effort
+        headers = {"Authorization": f"Bearer {self._api_key}"}
+        usage_box: dict = {}
+
+        def gen() -> Iterator[str]:
+            import httpx
+
+            with httpx.stream("POST", self._url, headers=headers,
+                              json=payload, timeout=self._timeout_s) as resp:
+                if resp.status_code != 200:
+                    body = resp.read().decode("utf-8", errors="replace")
+                    raise LLMError(f"HTTP {resp.status_code}: {body[:200]}")
+                for line in resp.iter_lines():
+                    if not line.startswith("data:"):
+                        continue
+                    data = line[len("data:"):].strip()
+                    if not data or data == "[DONE]":
+                        if data == "[DONE]":
+                            break
+                        continue
+                    obj = json.loads(data)
+                    if obj.get("usage"):
+                        usage_box.update(obj["usage"])
+                    choices = obj.get("choices") or []
+                    if not choices:
+                        continue
+                    delta = (choices[0].get("delta") or {}).get("content")
+                    if delta:
+                        yield delta
+
+        return gen(), usage_box

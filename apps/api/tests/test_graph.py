@@ -41,8 +41,9 @@ def make_budget(total_llm=200_000, reserve=8_000, credits=16, pages=12,
 
 
 def make_tools(llm_sides, search_results=None, fetch_failures=None,
-               budget=None, search_error=None):
-    """llm_sides: 按调用序返回的 content 列表;fetch_failures: {url: Exception}。"""
+               budget=None, search_error=None, llm_stream_chunks=None):
+    """llm_sides: 按调用序返回的 content 列表;fetch_failures: {url: Exception};
+    llm_stream_chunks: writer 流式片段列表(提供时 writer 走流式)。"""
     calls = {"llm": [], "fetch": [], "search": []}
     usage = {"prompt_tokens": 100, "completion_tokens": 50, "total_tokens": 150}
 
@@ -53,6 +54,18 @@ def make_tools(llm_sides, search_results=None, fetch_failures=None,
         if isinstance(content, Exception):
             raise content
         return LLMResult(content=content, usage=dict(usage))
+
+    def llm_chat_stream(messages, *, max_tokens, tier):
+        calls["llm"].append({"tier": tier, "max_tokens": max_tokens,
+                             "messages": messages, "stream": True})
+        usage_box: dict = {}
+        chunks = list(llm_stream_chunks or [])
+
+        def gen():
+            yield from chunks
+            usage_box.update(dict(usage))
+
+        return gen(), usage_box
 
     def search_fn(query, *, limit):
         calls["search"].append(query)
@@ -70,7 +83,9 @@ def make_tools(llm_sides, search_results=None, fetch_failures=None,
 
     events = []
     return graph.GraphTools(
-        llm_chat=llm_chat, search_fn=search_fn, fetch_async=fetch_async,
+        llm_chat=llm_chat,
+        llm_chat_stream=llm_chat_stream if llm_stream_chunks else None,
+        search_fn=search_fn, fetch_async=fetch_async,
         budget=budget or make_budget(), emit=lambda e, p: events.append((e, p)),
         allowed_domains=ALLOWED,
     ), events, calls
@@ -327,6 +342,49 @@ def test_reader_rechecks_research_budget_between_pages():
     assert "自由线程" in state["report_md"]
     assert state["citation_map"]
     assert b.usage_snapshot()["llm_tokens"] == 600  # writer 用预留 150
+
+
+# ---- P2:writer 流式输出(第四轮评审) ----------------------------------------
+
+def test_writer_streams_delta_chunks_and_usage_settled():
+    """writer 走流式:逐片段 emit report_delta(draft=true),片段之和即草稿;
+    usage 按流结束的 usage 结算(评审 P2)。"""
+    chunks = ["# Python 3.13 研究报告\n\n", "自由线程是本版核心特性 [1]。\n\n",
+              "错误消息改进同样显著 [2]。\n"]
+    tools, events, calls = make_tools(
+        [PLANNER_JSON,
+         reader_json(["自由线程模式,可禁用全局解释器锁",
+                      "交互式解释器支持多行编辑与彩色提示"]),
+         reader_json(["错误消息更加友好"])],
+        search_results=default_search_results(),
+        llm_stream_chunks=chunks)
+    state = asyncio.run(graph.run_research(tools, "Q", task_id="t_p2a"))
+
+    deltas = [p for e, p in events if e == "report_delta"]
+    assert len(deltas) == len(chunks)               # 逐片段, 每片段一帧
+    assert all(p["draft"] is True for p in deltas)
+    assert "".join(p["md"] for p in deltas) == WRITER_REPORT  # 片段之和 = 正文
+    assert state["report_md"] == WRITER_REPORT
+    assert calls["llm"][-1]["stream"] is True
+    assert tools.budget.usage_snapshot()["llm_tokens"] == 600  # 4×150, 流 usage 已入账
+
+
+def test_writer_stream_revision_replaces_draft():
+    """流式草稿校验失败 → 修订后 emit replace 帧(前端整体替换草稿)。"""
+    tools, events, calls = make_tools(
+        [PLANNER_JSON,
+         reader_json(["自由线程模式,可禁用全局解释器锁",
+                      "交互式解释器支持多行编辑与彩色提示"]),
+         reader_json(["错误消息更加友好"]),
+         WRITER_REPORT],                            # 第 4 次 = 修订调用
+        search_results=default_search_results(),
+        llm_stream_chunks=["草稿片段(含越界 [5])"])
+    state = asyncio.run(graph.run_research(tools, "Q", task_id="t_p2b"))
+
+    deltas = [p for e, p in events if e == "report_delta"]
+    assert deltas[-1]["replace"] is True            # 修订结果替换草稿
+    assert deltas[-1]["md"] == WRITER_REPORT
+    assert state["report_md"] == WRITER_REPORT
 
 
 def test_reader_rechecks_time_before_summarize():

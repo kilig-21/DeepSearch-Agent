@@ -55,7 +55,8 @@ def default_tools_builder(budget: Budget) -> GraphTools:
             proxy=proxy or FETCH_PROXY)
 
     return GraphTools(
-        llm_chat=llm.chat, search_fn=search_fn, fetch_async=fetch_async,
+        llm_chat=llm.chat, llm_chat_stream=llm.chat_stream,
+        search_fn=search_fn, fetch_async=fetch_async,
         budget=budget, emit=console_emit,
         allowed_domains=set(ALLOWED_DOMAINS), proxy=FETCH_PROXY,
     )

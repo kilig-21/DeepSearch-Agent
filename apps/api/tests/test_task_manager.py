@@ -148,6 +148,30 @@ def test_done_not_emitted_when_persist_fails(tmp_path):
 
 # ---- 取消路径 ---------------------------------------------------------------
 
+def _writer_stream_tools(gate: threading.Event, release: threading.Event):
+    """writer 走流式:前 2 个片段正常发出后阻塞等 release——片段间取消窗口。"""
+    tools, _e, _c = make_tools(
+        happy_llm_sides()[:3],  # planner + 2 页 reader(writer 不走一次性 llm_chat)
+        search_results=default_search_results())
+    chunks = ["# 标题\n", "正文 [1]。\n", "更多 [2]。\n"]
+
+    def llm_chat_stream(messages, *, max_tokens, tier):
+        usage_box: dict = {}
+
+        def gen():
+            yield chunks[0]
+            yield chunks[1]
+            gate.set()
+            release.wait(timeout=10)  # 取消窗口: 主线程在此请求取消
+            yield chunks[2]           # emit 该片段时取消检查点生效
+            usage_box.update(USAGE)
+
+        return gen(), usage_box
+
+    tools.llm_chat_stream = llm_chat_stream
+    return tools
+
+
 def test_cancel_during_writer_yields_cancelled_without_report(tmp_path):
     """验收①: writer 执行中取消 → cancelled, 不产生半截正式报告。"""
     engine = db.make_engine(tmp_path / "o.db")
@@ -175,6 +199,41 @@ def test_cancel_during_writer_yields_cancelled_without_report(tmp_path):
     assert not any(e.event == "done" for e in events)
     assert events[-1].event == "cancelled"
     assert events[-1].payload["stop_reason"] == "user_cancelled"
+
+
+def test_cancel_during_writer_stream_receives_deltas_then_no_report(tmp_path):
+    """测试类1(评审补齐):writer 未结束时已收到多个正文片段,取消后
+    不落正式报告——片段 emit 即取消检查点,流式过程中取消即时生效。"""
+    engine = db.make_engine(tmp_path / "o.db")
+    db.init_db(engine)
+    gate, release = threading.Event(), threading.Event()
+    mgr = _make_manager(engine, _done_builder(
+        _writer_stream_tools(gate, release)))
+    task_id = mgr.create("Q")
+    try:
+        assert gate.wait(5), "writer 流式未开始"
+        assert mgr.request_cancel(task_id) is True
+    finally:
+        release.set()
+    assert mgr.wait(task_id, timeout=10)
+
+    task = db.get_task(engine, task_id)
+    assert task["status"] == "cancelled"
+    assert task["stop_reason"] == "user_cancelled"
+    assert task["report_id"] is None
+    with engine.connect() as conn:
+        count = conn.exec_driver_sql(
+            "SELECT COUNT(*) FROM reports WHERE task_id = ?",
+            (task_id,)).scalar()
+    assert count == 0
+
+    events = mgr.events_after(task_id, 0)
+    deltas = [e for e in events if e.event == "report_delta"]
+    assert len(deltas) >= 2  # 取消前已收到多个正文片段
+    assert "".join(e.payload["md"] for e in deltas) == "# 标题\n正文 [1]。\n"
+    assert all(e.payload.get("draft") is True for e in deltas)
+    assert not any(e.event == "done" for e in events)
+    assert events[-1].event == "cancelled"
 
 
 def test_cancel_after_terminal_is_rejected(tmp_path):

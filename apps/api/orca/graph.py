@@ -61,6 +61,8 @@ class GraphTools:
     emit: Callable              # (event: str, payload: dict) -> None
     allowed_domains: set[str]
     proxy: str | None = None
+    # (messages, *, max_tokens, tier) -> (片段迭代器, usage 容器);writer 流式
+    llm_chat_stream: Callable | None = None
     max_pages_per_round: int = _TOP_N
     events: list = field(default_factory=list)  # 仅供工具调试
 
@@ -321,23 +323,44 @@ def make_writer(tools: GraphTools):
             "2. 每条实质性断言都要有对应引用;无证据支持的猜测不得写入。\n"
             "3. 结构:# 标题、结论段、详情段、局限性段(说明证据覆盖的不足)。\n\n"
             "证据池:\n" + "\n".join(lines))
-        result = tools.llm_chat([{"role": "user", "content": prompt}],
-                                max_tokens=_WRITER_MAX_TOKENS,
-                                tier="high_quality")
-        tools.budget.settle_llm(result.usage.get("total_tokens", 0),
-                                for_writer=True)
-
-        check = check_report(result.content, evidence)
-        if check.valid:
-            final, usage_extra = result.content, {}
+        messages = [{"role": "user", "content": prompt}]
+        streamed = False
+        if tools.llm_chat_stream is not None:
+            # 流式(§3.4 草稿):逐片段 emit, 片段间经过取消检查点——
+            # 取消在流式过程中即可生效(第四轮评审 P2)
+            gen, usage_box = tools.llm_chat_stream(
+                messages, max_tokens=_WRITER_MAX_TOKENS, tier="high_quality")
+            pieces: list[str] = []
+            for piece in gen:
+                pieces.append(piece)
+                tools.emit("report_delta", {"md": piece, "draft": True})
+            tools.budget.settle_llm(usage_box.get("total_tokens", 0),
+                                    for_writer=True)
+            content = "".join(pieces)
+            streamed = True
         else:
-            final, usage_extra = revise_report(result.content, evidence,
+            result = tools.llm_chat(messages, max_tokens=_WRITER_MAX_TOKENS,
+                                    tier="high_quality")
+            tools.budget.settle_llm(result.usage.get("total_tokens", 0),
+                                    for_writer=True)
+            content = result.content
+            streamed = False
+
+        check = check_report(content, evidence)
+        if check.valid:
+            final, usage_extra = content, {}
+            if not streamed:  # 非流式: 一次性草稿帧(现状行为)
+                tools.emit("report_delta", {"md": final, "draft": True})
+        else:
+            final, usage_extra = revise_report(content, evidence,
                                                tools.llm_chat)
             if usage_extra:
                 tools.budget.settle_llm(
                     usage_extra.get("total_tokens", 0), for_writer=True)
+            # 修订正文与已发草稿不一致 → replace 帧让前端整体替换草稿
+            tools.emit("report_delta",
+                       {"md": final, "draft": True, "replace": True})
 
-        tools.emit("report_delta", {"md": final, "draft": True})
         final_map = check_report(final, evidence).citation_map
         sr = state.get("stop_reason") or "single_pass"
         return {"report_md": final, "citation_map": final_map,

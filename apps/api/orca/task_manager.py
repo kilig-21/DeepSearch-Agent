@@ -142,7 +142,30 @@ class TaskManager:
         runtime = self._runtimes.get(task_id)
         if runtime is None:
             return []
-        return [e for e in runtime.buffer if e.seq > last_seq]
+        with self._lock:  # 与写入端同一临界区: 读到的 seq/缓冲一致(P4)
+            return [e for e in runtime.buffer if e.seq > last_seq]
+
+    def resume_plan(self, task_id: str,
+                    last_id: int | None) -> tuple[str, int]:
+        """SSE 恢复决策(§3.4 两路恢复; 第四轮评审 P4, 同一临界区原子判定):
+
+        - ("snapshot", seq):无游标(含 0/负数)或游标超出缓冲覆盖范围 →
+          客户端须先收完整 snapshot 对齐到当前 seq
+        - ("replay", last_id):游标落在缓冲覆盖范围内 → 从缓冲补发增量
+
+        任何路径都不允许"仅凭客户端 seq 请求增量"。"""
+        runtime = self._runtimes.get(task_id)
+        if runtime is None:
+            return ("missing", 0)
+        with self._lock:
+            seq = runtime.seq
+            buffer_first = next(iter(runtime.buffer), None)
+            if last_id is None or last_id <= 0:      # 无游标(0 视同无游标)
+                return ("snapshot", seq)
+            if buffer_first is not None and \
+                    buffer_first.seq <= last_id <= seq:  # 覆盖范围内 → 补发
+                return ("replay", last_id)
+            return ("snapshot", seq)                 # 超出/超前 → 对齐
 
     # ---- 快照(§3.4 v1.3 扩充结构) -----------------------------------------
 

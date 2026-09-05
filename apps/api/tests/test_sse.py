@@ -1,9 +1,10 @@
 """SSE 事件流测试(§3.4 恢复语义, fake 工具链 + 临时 DB, 不联网)。
 
-- 新建连接(刷新/视图丢失)→ 第一帧必为完整 snapshot(含 report_md 前半段)
-- 普通断线(Last-Event-ID)→ 从环形缓冲补发, 不重复不遗漏
+- 新建连接(刷新/视图丢失, 含零游标)→ 第一帧必为完整 snapshot(第四轮评审
+  P4: 不凭客户端 seq 从头补发; running 时 snapshot 带已生成草稿正文)
+- 普通断线(Last-Event-ID 在缓冲覆盖范围内)→ 从缓冲补发, 不重复不遗漏
 - Last-Event-ID 超出缓冲 → 发 snapshot 对齐
-- ?after= URL 参数等价 Last-Event-ID(头优先)
+- ?after= URL 参数已删除(P4): 传入被忽略, 一律按无游标 → snapshot
 - 心跳 ": ping";终态事件后关闭;终态快照(如 interrupted)也发送后关闭
 
 流式读取用 httpx ASGITransport 直连 app(事件循环内), 避免 TestClient
@@ -21,7 +22,11 @@ from tests.test_graph import (
     happy_llm_sides,
     make_tools,
 )
-from tests.test_task_manager import _done_builder, _writer_block_tools
+from tests.test_task_manager import (
+    _done_builder,
+    _writer_block_tools,
+    _writer_stream_tools,
+)
 
 HB = 0.2  # 测试心跳间隔(秒), 生产 20s
 
@@ -154,14 +159,16 @@ def test_new_connection_gets_snapshot_first_then_terminal_close(tmp_path):
 
 
 def test_running_task_snapshot_has_draft_progress(tmp_path):
+    """评审修正假覆盖:running 连接须在 writer 已产出片段后断言 snapshot
+    的 report_md 是已生成正文(P3), 而非等任务完成才连接。"""
     gate, release = threading.Event(), threading.Event()
 
     def builder(budget):
-        return _done_builder(_writer_block_tools(gate, release))(budget)
+        return _done_builder(_writer_stream_tools(gate, release))(budget)
 
     with _make_client(tmp_path, builder=builder) as client:
         task_id = client.post("/api/research", json={"topic": "Q"}).json()["task_id"]
-        assert gate.wait(5)
+        assert gate.wait(5)  # 前 2 个正文片段已发出
         lines = collect(client, f"/api/research/{task_id}/events",
                         stop=_stop_after_frames(1))
         assert lines is not None
@@ -172,6 +179,8 @@ def test_running_task_snapshot_has_draft_progress(tmp_path):
         assert snap["stop_reason"] is None
         assert snap["sub_questions"]
         assert snap["progress"]["sources_read"] >= 1
+        # P3: 运行中 snapshot 带已生成正文, 与已收到的片段逐字一致
+        assert snap["report_md"] == "# 标题\n正文 [1]。\n"
         release.set()
         client.app_state.manager.wait(task_id, timeout=10)
 
@@ -179,20 +188,22 @@ def test_running_task_snapshot_has_draft_progress(tmp_path):
 # ---- 普通断线路径: Last-Event-ID 补发 -------------------------------------------
 
 def test_last_event_id_resumes_from_buffer_without_duplicates(tmp_path):
+    """连接1 领 snapshot 对齐后继续收若干帧;连接2 带 Last-Event-ID →
+    从缓冲补发, 无 snapshot、无重复、无遗漏、补发连续。"""
     gate, release = threading.Event(), threading.Event()
 
     def builder(budget):
-        return _done_builder(_writer_block_tools(gate, release))(budget)
+        return _done_builder(_writer_stream_tools(gate, release))(budget)
 
     with _make_client(tmp_path, builder=builder) as client:
         task_id = client.post("/api/research", json={"topic": "Q"}).json()["task_id"]
-        # 连接1: after=0 从事件开头读(模拟已收到若干事件的页面), 读 4 帧断开
-        lines = collect(client, f"/api/research/{task_id}/events?after=0",
-                        stop=_stop_after_frames(4))
+        # 连接1: 无游标 → 第一帧 snapshot 对齐, 读到 snapshot + 1 个事件帧断开
+        lines = collect(client, f"/api/research/{task_id}/events",
+                        stop=_stop_after_frames(2))
         frames = parse_sse(lines)
-        assert frames and all(f["event"] != "snapshot" for f in frames), \
-            "after=0 的普通断线恢复应直接补发, 不发 snapshot"
-        last_id = frames[-1]["id"]
+        assert frames[0]["event"] == "snapshot"
+        last_id = frames[-1]["id"]  # 最后一帧(事件帧)的 id 作为断线游标
+        assert last_id > frames[0]["id"]
         gate.wait(5)
         release.set()
         client.app_state.manager.wait(task_id, timeout=10)
@@ -202,9 +213,12 @@ def test_last_event_id_resumes_from_buffer_without_duplicates(tmp_path):
                          headers={"Last-Event-ID": str(last_id)})
     assert lines2 is not None
     resumed = parse_sse(lines2)
-    assert resumed[0]["event"] != "snapshot"  # 缓冲内直接补发
-    assert all(f["id"] > last_id for f in resumed if "id" in f)
-    assert resumed[-1]["event"] == "done"
+    resumed_frames = [f for f in resumed if "id" in f]
+    assert resumed_frames and resumed_frames[0]["event"] != "snapshot"  # 缓冲内直接补发
+    ids = [f["id"] for f in resumed_frames]
+    assert ids == list(range(last_id + 1, last_id + 1 + len(ids)))  # 连续无缺
+    assert all(f["id"] > last_id for f in resumed_frames)           # 无重复
+    assert resumed_frames[-1]["event"] == "done"
 
 
 def test_stale_last_event_id_falls_back_to_snapshot(tmp_path):
@@ -218,25 +232,77 @@ def test_stale_last_event_id_falls_back_to_snapshot(tmp_path):
     assert all(f["id"] > frames[0]["id"] for f in frames[1:] if "id" in f)
 
 
-def test_after_query_param_equals_last_event_id(tmp_path):
+# ---- P4: 零游标与 ?after= 收敛(测试类4) ----------------------------------------
+
+def test_zero_last_event_id_falls_back_to_snapshot(tmp_path):
+    """Last-Event-ID: 0 视同无游标 → 完整 snapshot;不得凭 0 从头补发。"""
+    with _make_client(tmp_path) as client:
+        task_id = _run_to_completion(client)
+        lines = collect(client, f"/api/research/{task_id}/events",
+                        headers={"Last-Event-ID": "0"})
+    assert lines is not None
+    frames = parse_sse(lines)
+    assert frames[0]["event"] == "snapshot"
+    # snapshot 之后只补发 seq 更大的帧(无从头重放)
+    assert all(f["id"] > frames[0]["id"] for f in frames[1:] if "id" in f)
+
+
+def test_after_query_param_is_deleted_falls_back_to_snapshot(tmp_path):
+    """P4:?after= URL 参数路径已删除——传入被忽略, 一律按无游标发 snapshot,
+    任何路径不得仅凭客户端 seq 请求增量。"""
     with _make_client(tmp_path) as client:
         task_id = _run_to_completion(client)
         lines = collect(client, f"/api/research/{task_id}/events?after=1")
     assert lines is not None
     frames = parse_sse(lines)
+    assert frames[0]["event"] == "snapshot"
     ids = [f["id"] for f in frames if "id" in f]
-    assert ids and min(ids) > 1
+    assert ids and min(ids) == frames[0]["id"]  # 第一帧即 snapshot 对齐
 
 
-def test_last_event_id_header_takes_precedence_over_after(tmp_path):
+def test_ahead_last_event_id_falls_back_to_snapshot(tmp_path):
+    """Last-Event-ID 超前于服务端 seq(伪造)→ 不补发, snapshot 对齐。"""
     with _make_client(tmp_path) as client:
         task_id = _run_to_completion(client)
-        lines = collect(client, f"/api/research/{task_id}/events?after=1",
+        lines = collect(client, f"/api/research/{task_id}/events",
                         headers={"Last-Event-ID": "999999"})
     assert lines is not None
     frames = parse_sse(lines)
-    # 999999 超前于服务端 seq → snapshot 对齐(头优先于 after)
     assert frames[0]["event"] == "snapshot"
+    assert all(f["id"] > frames[0]["id"] for f in frames[1:] if "id" in f)
+
+
+def test_snapshot_then_replay_gapless_under_publish_race(tmp_path):
+    """测试类4(snapshot 与事件发布竞争):snapshot 对齐后断开, 后续连接
+    从 snapshot.seq 之后补发, 与 snapshot 帧无缝(不丢不重)。"""
+    gate, release = threading.Event(), threading.Event()
+
+    def builder(budget):
+        return _done_builder(_writer_stream_tools(gate, release))(budget)
+
+    with _make_client(tmp_path, builder=builder) as client:
+        task_id = client.post("/api/research", json={"topic": "Q"}).json()["task_id"]
+        assert gate.wait(5)  # writer 前 2 片段已发出并发布
+        # 连接1: 读 snapshot 一帧即断开(模拟刷新后立刻再断)
+        lines = collect(client, f"/api/research/{task_id}/events",
+                        stop=_stop_after_frames(1))
+        snap = parse_sse(lines)[0]
+        assert snap["event"] == "snapshot"
+        snap_seq = snap["id"]
+        snap_md = snap["data"]["report_md"]
+        release.set()
+        client.app_state.manager.wait(task_id, timeout=10)
+        # 连接2: Last-Event-ID=snap_seq → 补发必须从 snap_seq+1 连续开始
+        lines2 = collect(client, f"/api/research/{task_id}/events",
+                         headers={"Last-Event-ID": str(snap_seq)})
+    resumed = [f for f in parse_sse(lines2) if "id" in f]
+    ids = [f["id"] for f in resumed]
+    assert ids == list(range(snap_seq + 1, snap_seq + 1 + len(ids)))
+    # snapshot 正文与补发事件正文拼接无丢失无重复(草稿链路)
+    deltas = [f for f in resumed if f["event"] == "report_delta"]
+    joined = snap_md + "".join(f["data"]["md"] for f in deltas
+                               if not f["data"].get("replace"))
+    assert joined == "# 标题\n正文 [1]。\n更多 [2]。\n"
 
 
 # ---- 终态与心跳 ----------------------------------------------------------------

@@ -74,14 +74,15 @@ def test_scenario_1_cancel_during_writer(tmp_path):
                 (task_id,)).scalar()
         assert n == 0
         # 事件流补发路径: 缓冲内事件含 cancelled 终态帧, 无 done/task_failed
-        # (在线页面实时收到终态帧在块 8 真实 uvicorn 演示; TestClient 流式
-        #  响应缓冲到 app 结束才交付, 无法在单测中验证实时性)
+        # (P4: 无游标连接只发 snapshot 即关闭——snapshot 已呈现终态;
+        #  用缓冲内游标走补发路径验证事件帧)
         lines2 = []
-        with client.stream("GET", f"/api/research/{task_id}/events?after=0") as resp:
+        with client.stream("GET", f"/api/research/{task_id}/events",
+                           headers={"Last-Event-ID": "1"}) as resp:
             for line in resp.iter_lines():
                 lines2.append(line)
         events = [l.split(": ", 1)[1] for l in lines2
-                  if l.startswith("event: ")]
+                  if l.startswith("event: ") and l != "event: snapshot"]
         assert events[-1] == "cancelled"
         assert "done" not in events
         assert "task_failed" not in events
@@ -251,10 +252,11 @@ def test_extra_report_and_task_status_same_transaction(tmp_path):
                 (task_id,)).scalar()
         assert n == 0  # 报告与 completed 状态同进同退
         lines = []
-        with client.stream("GET", f"/api/research/{task_id}/events?after=0") as resp:
+        with client.stream("GET", f"/api/research/{task_id}/events",
+                           headers={"Last-Event-ID": "1"}) as resp:
             for line in resp.iter_lines():
                 lines.append(line)
         events = [l.split(": ", 1)[1] for l in lines
-                  if l.startswith("event: ")]
+                  if l.startswith("event: ") and l != "event: snapshot"]
         assert events[-1] == "task_failed"
         assert "done" not in events

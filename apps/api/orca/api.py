@@ -75,14 +75,10 @@ def create_app(*, db_path=None, tools_builder=None, budget_builder=None,
         return snap
 
     @app.get("/api/research/{task_id}/events")
-    async def research_events(
-        task_id: str,
-        request: Request,
-        after: int | None = None,
-    ):
+    async def research_events(task_id: str, request: Request):
         if db.get_task(engine, task_id) is None:
             raise HTTPException(status_code=404, detail="任务不存在")
-        last_id = _parse_last_event_id(request, after)
+        last_id = _parse_last_event_id(request)
         return StreamingResponse(
             _event_stream(manager, engine, task_id, last_id,
                           heartbeat_interval),
@@ -154,15 +150,16 @@ def _snapshot(manager: TaskManager, engine, task_id: str) -> dict | None:
 
 # ---- SSE(§3.4) --------------------------------------------------------------
 
-def _parse_last_event_id(request: Request, after: int | None) -> int | None:
-    """Last-Event-ID 头优先(浏览器自动重连携带);否则用 ?after= URL 参数。"""
+def _parse_last_event_id(request: Request) -> int | None:
+    """游标只来自 Last-Event-ID 头(浏览器 EventSource 自动重连携带;
+    第四轮评审 P4:?after= URL 参数路径已删除, 不得仅凭客户端 seq 请求增量)。"""
     raw = request.headers.get("last-event-id")
-    if raw is not None:
-        try:
-            return int(raw)
-        except ValueError:
-            return None
-    return after
+    if raw is None:
+        return None
+    try:
+        return int(raw)
+    except ValueError:
+        return None
 
 
 def _sse_frame(seq: int, event: str, payload: dict) -> str:
@@ -173,11 +170,14 @@ def _sse_frame(seq: int, event: str, payload: dict) -> str:
 
 async def _event_stream(manager: TaskManager, engine, task_id: str,
                         last_id: int | None, heartbeat_interval: float):
-    """SSE 事件流(§3.4 两路恢复):
+    """SSE 事件流(§3.4 两路恢复; 第四轮评审 P4 游标收敛):
 
-    - 新建连接无 last_id(刷新/视图丢失)→ 先发完整 snapshot 再接增量
-    - last_id 在环形缓冲内(普通断线)→ 从缓冲补发, 不重复不遗漏
-    - last_id 超出缓冲/超前 → 发 snapshot 对齐
+    - 新建连接无游标(刷新/视图丢失, 含 Last-Event-ID: 0)→ 先发完整
+      snapshot 对齐, 再接增量——不凭客户端 seq 从头补发
+    - Last-Event-ID 落在环形缓冲覆盖范围内(普通断线)→ 从缓冲补发增量
+    - 超出/超前缓冲覆盖 → 回退完整 snapshot 对齐
+    - 恢复决策与 seq/缓冲读取同一临界区(manager.resume_plan),
+      消除 snapshot 与事件发布的竞争
     - 终态事件发完即关闭;interrupted 等 DB 终态快照发送后关闭
     - 断开只取消订阅, 不取消研究任务
     """
@@ -191,23 +191,13 @@ async def _event_stream(manager: TaskManager, engine, task_id: str,
     queue: asyncio.Queue = asyncio.Queue()
     sub_id = manager.subscribe(task_id, queue)
     try:
-        # 恢复起点: after=0 / Last-Event-ID 落在环形缓冲内 → 直接补发;
-        # 无 last_id(刷新)或超出/超前缓冲 → 先发完整 snapshot 对齐(§3.4)
-        buffer_first = next(iter(runtime.buffer), None)
-        if last_id == 0:
-            in_buffer = True
-        elif last_id is None:
-            in_buffer = False
-        elif buffer_first is not None:
-            in_buffer = buffer_first.seq <= last_id <= runtime.seq
-        else:
-            in_buffer = last_id == runtime.seq
-        if in_buffer:
-            sent = last_id or 0
-        else:
+        mode, from_seq = manager.resume_plan(task_id, last_id)
+        if mode == "snapshot":
             snap = manager.snapshot(task_id)
             sent = snap["seq"]
             yield _sse_frame(sent, "snapshot", snap)
+        else:  # replay: 缓冲覆盖范围内, 从游标之后补发
+            sent = from_seq
 
         while True:
             for record in manager.events_after(task_id, sent):

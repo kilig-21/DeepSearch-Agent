@@ -257,3 +257,94 @@ def test_search_rounds_recorded():
     assert state["search_rounds"] == [
         {"round_no": 1, "query": "Python 3.13 新特性", "result_count": 3,
          "credits_used": 1}]
+
+
+# ---- P1:reader 循环内逐篇/摘要前重查预算(第四轮评审) -----------------------
+
+PAGES_4 = {
+    "https://docs.python.org/a": PAGE_A,
+    "https://docs.python.org/b": PAGE_B,
+    "https://docs.python.org/c": "页面 C:PEP 703 相关内容。",
+    "https://docs.python.org/d": "页面 D:PEP 669 相关内容。",
+}
+
+
+def _results_4():
+    return [SearchResult(url=u, title=f"T{i}", snippet="s")
+            for i, u in enumerate(PAGES_4)]
+
+
+def _make_tools_multi(llm_sides, *, budget=None, clock=None):
+    """4 个可抓页面;clock 可选(供 out_of_time 在抓取/摘要间推进)。"""
+    calls = {"llm": [], "fetch": []}
+    usage = {"prompt_tokens": 100, "completion_tokens": 50, "total_tokens": 150}
+
+    def llm_chat(messages, *, max_tokens, tier, reasoning_effort=None):
+        calls["llm"].append(tier)
+        content = llm_sides.pop(0)
+        if isinstance(content, Exception):
+            raise content
+        return LLMResult(content=content, usage=dict(usage))
+
+    def search_fn(query, *, limit):
+        return (_results_4(), 1)
+
+    async def fetch_async(url, *, allowed_domains=None, proxy=None):
+        calls["fetch"].append(url)
+        if clock is not None:
+            clock[0] += 100.0  # 抓取耗时: 每页后推进时钟
+        return ExtractedPage(url=url, final_url=url, text=PAGES_4[url])
+
+    events = []
+    tools = graph.GraphTools(
+        llm_chat=llm_chat, search_fn=search_fn, fetch_async=fetch_async,
+        budget=budget or make_budget(), emit=lambda e, p: events.append((e, p)),
+        allowed_domains=ALLOWED)
+    return tools, events, calls
+
+
+def test_reader_rechecks_research_budget_between_pages():
+    """多页任务中途研究额度耗尽 → 剩余页不再抓取/调模型(实际调用次数
+    不超预算),已有候选证据保留并走 writer 预留出报告(P1)。"""
+    # research 额度 = 650 - 200 = 450 = planner 150 + 2 页摘要 300
+    b = make_budget(total_llm=650, reserve=200)
+    tools, events, calls = _make_tools_multi(
+        [PLANNER_JSON,
+         reader_json(["自由线程模式,可禁用全局解释器锁"]),
+         reader_json(["错误消息更加友好"]),
+         WRITER_REPORT],
+        budget=b)
+    state = asyncio.run(graph.run_research(tools, "Q", task_id="t_p1a"))
+
+    # 页 3 抓取前已耗尽: 不再抓取, 不再调研究类 LLM
+    assert len(calls["fetch"]) == 2
+    assert calls["llm"].count("daily") == 3      # planner + 2 页摘要
+    assert calls["llm"][-1] == "high_quality"    # 第 4 次 = writer(预留)
+    assert b.used_llm_tokens <= b.total_llm_tokens  # 研究未越研究额度(450)
+    # 已有候选证据保留, 走 writer(预留)出正式报告
+    assert state["stop_reason"] == "budget_exhausted"
+    assert len(state["evidence"]) == 2
+    assert "自由线程" in state["report_md"]
+    assert state["citation_map"]
+    assert b.usage_snapshot()["llm_tokens"] == 600  # writer 用预留 150
+
+
+def test_reader_rechecks_time_before_summarize():
+    """抓取后、摘要前超时(out_of_time)→ 不调模型, 已抓证据保留(P1)。"""
+    t = [0.0]
+    b = make_budget(time_s=350.0, clock=lambda: t[0])
+    tools, events, calls = _make_tools_multi(
+        [PLANNER_JSON,
+         reader_json(["自由线程模式,可禁用全局解释器锁"]),
+         reader_json(["错误消息更加友好"]),
+         reader_json(["PEP 703"])],
+        budget=b, clock=t)
+    state = asyncio.run(graph.run_research(tools, "Q", task_id="t_p1b"))
+
+    # 页 1 摘要后 t=200;页 2 抓取后 t=300 仍够, 页 3 抓取后 t=400 超时?
+    # 每页抓取后 +100: 页1 抓取后 100(摘要前 100<350 → 摘要), 页2 抓取后 200,
+    # 页3 抓取后 300, 页4 抓取后 400 → 摘要前 400 > 350 → 停, 证据保留
+    assert state["stop_reason"] == "timeout"
+    assert len(calls["fetch"]) == 4
+    assert len(calls["llm"]) == 4          # planner + 3 页摘要, 第 4 页摘要前停
+    assert len(state["evidence"]) == 3

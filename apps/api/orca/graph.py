@@ -176,7 +176,17 @@ def make_reader(tools: GraphTools):
         candidates: list[CandidateEvidence] = list(
             state.get("candidate_evidence", []))
 
+        def _budget_stop() -> str | None:
+            """篇间/摘要前重查(§3.6):控制类即时终止, 研究耗尽收尾保留证据。"""
+            if budget_stop := _control_stop(state, tools.budget):
+                return budget_stop
+            if tools.budget.research_exhausted():
+                return "budget_exhausted"
+            return None
+
         for n, result in enumerate(pages, start=1):
+            if (s := _budget_stop()) is not None:
+                return {"candidate_evidence": candidates, "stop_reason": s}
             if not tools.budget.start_page():   # 抓取页数熔断(§3.6 ≤12)
                 tools.emit("warning", {"stage": "reader",
                                        "detail": "页数上限, 停止抓取"})
@@ -191,6 +201,10 @@ def make_reader(tools: GraphTools):
                 tools.emit("warning", {"stage": "reader",
                                        "detail": f"抓取/提取失败 {result.url}: {e}"})
                 continue
+
+            # 抓取可能耗时: 摘要(模型调用)前再查一次预算/时限(第四轮评审 P1)
+            if (s := _budget_stop()) is not None:
+                return {"candidate_evidence": candidates, "stop_reason": s}
 
             prompt = (
                 f"研究主题: {state['topic']}\n"

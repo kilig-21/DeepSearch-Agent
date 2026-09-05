@@ -30,7 +30,9 @@ QUESTIONS: list[Question] = [
     # ---- 在线题(真实搜索/抓取, 记录时点快照) -------------------------------
     Question(
         qid="fact_mdn401", qtype="fact", mode="online",
-        topic="HTTP 401 与 403 状态码的含义和区别是什么?",
+        # 首跑实测: 纯中文查询命中白名单外站点(md401 首轮 0 白名单结果,
+        # 诚实拒答)。题目含英文关键词, 引导 planner 产出可命中的查询。
+        topic="HTTP 401 (Unauthorized) 与 403 (Forbidden) 状态码的含义和区别是什么?",
         required_points=[
             "401 表示未认证(需要身份验证凭据)",
             "403 表示服务器拒绝访问(身份已认证或与认证无关)",

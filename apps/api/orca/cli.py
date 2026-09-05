@@ -101,7 +101,7 @@ _current_budget: Budget | None = None
 
 
 def cmd_research(topic: str, *, db_path=None, tools_builder=default_tools_builder,
-                 budget_builder=_make_budget) -> int:
+                 budget_builder=_make_budget, out: dict | None = None) -> int:
     global _current_budget
     engine = db.make_engine(db_path or DB_PATH)
     db.init_db(engine)
@@ -117,6 +117,10 @@ def cmd_research(topic: str, *, db_path=None, tools_builder=default_tools_builde
         state = _run(tools, topic, task_id)
         state["duration_s"] = time.monotonic() - t0
         report_id = _persist(engine, task_id, state)
+        if out is not None:
+            # 评测 runner 经此取回本次任务结果; 禁止用 list_tasks()[-1]
+            # (并发写入同一 DB 时会拿错行)
+            out.update(task_id=task_id, report_id=report_id, state=state)
         console_emit("done", {
             "report_id": report_id, "stop_reason": state.get("stop_reason"),
             "token_cost": budget.usage_snapshot()["llm_tokens"],
@@ -126,10 +130,14 @@ def cmd_research(topic: str, *, db_path=None, tools_builder=default_tools_builde
         return 0
     except KeyboardInterrupt:
         db.cancel_task(engine, task_id)
+        if out is not None:
+            out.update(task_id=task_id)
         console_emit("cancelled", {})
         return 130
     except Exception as e:  # noqa: BLE001
         db.fail_task(engine, task_id, stop_reason="execution_error")
+        if out is not None:
+            out.update(task_id=task_id)
         console_emit("task_failed", {"detail": f"{type(e).__name__}: {e}"})
         return 1
 

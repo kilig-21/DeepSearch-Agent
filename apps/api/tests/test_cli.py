@@ -70,6 +70,38 @@ def test_cmd_research_error_marks_task_failed(tmp_path, capsys):
     assert task["stop_reason"] == "execution_error"
 
 
+def test_cmd_research_out_fills_task_id_and_state(tmp_path, capsys):
+    """评测 runner 依赖 out 回传 task_id/state 取回本次任务结果,
+    不用 list_tasks()[-1](并发写入同一 DB 时会拿错行)。"""
+    db_path = tmp_path / "o.db"
+    out: dict = {}
+    rc = cli.cmd_research("Q", db_path=db_path, tools_builder=builder(),
+                          out=out)
+    assert rc == 0
+    assert out["task_id"]
+    assert out["report_id"]
+    assert out["state"]["report_md"]
+    assert out["state"]["stop_reason"] == "single_pass"
+
+    from orca import db
+    eng = db.make_engine(db_path)
+    task = [t for t in db.list_tasks(eng) if t["id"] == out["task_id"]][0]
+    assert task["status"] == "completed"
+
+
+def test_cmd_research_out_fills_task_id_on_failure(tmp_path, capsys):
+    db_path = tmp_path / "o.db"
+
+    def bad_builder(budget):
+        raise RuntimeError("boom")
+
+    out: dict = {}
+    rc = cli.cmd_research("Q", db_path=db_path, tools_builder=bad_builder,
+                          out=out)
+    assert rc == 1
+    assert out["task_id"]  # 失败任务也能定位到行
+
+
 def test_cleanup_command_clears_db(tmp_path, capsys):
     db_path = tmp_path / "o.db"
     cli.cmd_research("Q", db_path=db_path, tools_builder=builder())

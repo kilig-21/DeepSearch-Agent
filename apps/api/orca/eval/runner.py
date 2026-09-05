@@ -125,29 +125,33 @@ def _budget_builder_for(q: Question):
 def run_question(q: Question, *, db_path, builder, collector: dict) -> int:
     """跑一题(复用 CLI 全链路: 建任务→图→同事务落库), 组装结果行。
 
-    tokens/credits 从落库的 tasks.usage_json 取(done 事件是 CLI 呈现层,
-    不经过 collector);duration 用评测侧 wall time(含落库, 更真实)。
+    任务结果经 cmd_research 的 out 回传(task_id/state), 不用
+    list_tasks()[-1]——并发写入同一 DB 时会拿错行(实测踩坑)。
+    tokens/credits 从落库的 tasks.usage_json 按 task_id 精确取;
+    duration 用评测侧 wall time(含落库, 更真实)。
     """
     import time as _time
 
     t0 = _time.monotonic()
+    out: dict = {}
     rc = cli.cmd_research(q.topic, db_path=db_path, tools_builder=builder,
-                          budget_builder=_budget_builder_for(q))
+                          budget_builder=_budget_builder_for(q), out=out)
     duration_s = round(_time.monotonic() - t0, 1)
     events = list(getattr(builder, "events", []))
 
+    task_id = out.get("task_id")
+    state = out.get("state") or {}
     engine = db.make_engine(db_path)
-    task = db.list_tasks(engine)[-1]
-    report = db.get_report(engine, task["report_id"]) \
-        if task["report_id"] else None
-    usage = task["usage_json"] or {}
+    task = (next((t for t in db.list_tasks(engine) if t["id"] == task_id),
+                 None) or {})
+    usage = task.get("usage_json") or {}
 
-    citation_map = (report["citation_map_json"] if report else {}) or {}
-    report_md = (report["final_md"] if report else "") or ""
+    citation_map = state.get("citation_map") or {}
+    report_md = state.get("report_md") or ""
     row = {
         "qid": q.qid, "qtype": q.qtype, "mode": q.mode, "topic": q.topic,
-        "task_id": task["id"], "report_id": task["report_id"],
-        "status": task["status"], "stop_reason": task["stop_reason"],
+        "task_id": task_id, "report_id": out.get("report_id"),
+        "status": task.get("status"), "stop_reason": task.get("stop_reason"),
         "tokens": usage.get("llm_tokens"),
         "credits": usage.get("tavily_credits"),
         "duration_s": duration_s,

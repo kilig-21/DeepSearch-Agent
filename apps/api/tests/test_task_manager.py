@@ -341,6 +341,71 @@ def test_snapshot_after_cancel_hides_draft(tmp_path):
     assert snap["report_md"] == ""
 
 
+# ---- P3: 运行中 snapshot 带正文(测试类2) ------------------------------------
+
+def test_snapshot_running_includes_draft_consistent_with_seq(tmp_path):
+    """P3:running snapshot 的 report_md 必须是已生成正文(非空串),
+    且正文/进度/seq 与事件流对应同一时点。"""
+    engine = db.make_engine(tmp_path / "o.db")
+    db.init_db(engine)
+    gate, release = threading.Event(), threading.Event()
+    mgr = _make_manager(engine, _done_builder(
+        _writer_stream_tools(gate, release)))
+    task_id = mgr.create("Q")
+    try:
+        assert gate.wait(5), "writer 流式未开始"
+        snap = mgr.snapshot(task_id)
+        events = mgr.events_after(task_id, 0)
+        deltas = [e for e in events if e.event == "report_delta"]
+        assert snap["status"] == "running"
+        assert snap["report_md"] == "# 标题\n正文 [1]。\n"   # 已生成正文
+        assert snap["report_md"] == "".join(
+            e.payload["md"] for e in deltas)                # 与事件流一致
+        assert snap["seq"] == events[-1].seq                # 同一时点
+        assert snap["progress"]["sources_read"] >= 1
+    finally:
+        release.set()
+        mgr.wait(task_id, timeout=10)
+
+
+def test_refresh_recovery_draft_plus_deltas_verbatim(tmp_path):
+    """测试类2:刷新恢复逐字无丢失无重复——snapshot 草稿 + 后续片段
+    拼接 == 完整正文, snapshot 草稿是全文前缀(不重不漏)。"""
+    engine = db.make_engine(tmp_path / "o.db")
+    db.init_db(engine)
+    gate, release = threading.Event(), threading.Event()
+    mgr = _make_manager(engine, _done_builder(
+        _writer_stream_tools(gate, release)))
+    task_id = mgr.create("Q")
+    assert gate.wait(5)
+    snap = mgr.snapshot(task_id)
+    snap_md = snap["report_md"]
+    snap_seq = snap["seq"]
+    release.set()
+    assert mgr.wait(task_id, timeout=10)
+
+    later = [e for e in mgr.events_after(task_id, snap_seq)
+             if e.event == "report_delta" and not e.payload.get("replace")]
+    full = snap_md + "".join(e.payload["md"] for e in later)
+    assert full == "# 标题\n正文 [1]。\n更多 [2]。\n"   # 无丢失无重复
+    # 完成后正式版与草稿链路逐字一致
+    final_snap = mgr.snapshot(task_id)
+    assert final_snap["status"] == "completed"
+    assert final_snap["report_md"] == full
+
+
+def test_report_delta_replace_frame_replaces_draft(tmp_path):
+    """replace 帧(修订)整体替换草稿而非追加, snapshot 草稿即修订版。"""
+    engine = db.make_engine(tmp_path / "o.db")
+    db.init_db(engine)
+    mgr = _make_manager(engine, lambda budget: None)
+    runtime = mgr._runtime_for_test(task_id="t_rep", topic="Q")
+    mgr._record(runtime, "report_delta", {"md": "草稿", "draft": True})
+    mgr._record(runtime, "report_delta",
+                {"md": "修订版", "draft": True, "replace": True})
+    assert runtime.draft_md == "修订版"
+
+
 # ---- P5/P6: 终态发布窗口与取消/完成竞争(测试类5) ----------------------------
 
 def test_completed_persist_loses_race_to_cancel(tmp_path):

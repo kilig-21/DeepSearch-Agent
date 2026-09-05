@@ -147,29 +147,40 @@ class TaskManager:
     # ---- 快照(§3.4 v1.3 扩充结构) -----------------------------------------
 
     def snapshot(self, task_id: str) -> dict | None:
-        runtime = self._runtimes.get(task_id)
-        if runtime is None:
-            return None
-        report_md = ""
-        citation_map: dict = {}
-        if runtime.status == "completed" and runtime.report_id is not None:
-            report = db.get_report(self._engine, runtime.report_id)
+        """状态快照(§3.4 v1.3; 第四轮评审 P3):正文/进度/seq 在同一锁
+        临界区内一次取全, 三者对应同一时点;running 且有草稿时 report_md
+        必须是已生成正文(刷新恢复不丢草稿)。DB 读在锁外(锁内不做 IO)。"""
+        with self._lock:
+            runtime = self._runtimes.get(task_id)
+            if runtime is None:
+                return None
+            status = runtime.status
+            report_id = runtime.report_id
+            report_md = runtime.draft_md
+            citation_map: dict = {}
+            progress = {"sources_read": runtime.sources_read,
+                        "evidence_count": runtime.evidence_count}
+            sub_questions = list(runtime.sub_questions)
+            round_no = runtime.round_no
+            stop_reason = runtime.stop_reason
+            seq = runtime.seq
+        if status == "completed" and report_id is not None:
+            report = db.get_report(self._engine, report_id)
             if report:
                 report_md = report["final_md"]
                 citation_map = report["citation_map_json"]
-        # cancelled/failed/interrupted: 草稿不可恢复, report_md 如实为空
+        # cancelled/failed/interrupted: 草稿已在终态临界区清空 → 如实为空
         return {
             "task_id": task_id,
-            "status": runtime.status,
-            "stop_reason": runtime.stop_reason,
-            "report_id": runtime.report_id,
-            "round_no": runtime.round_no,
-            "sub_questions": list(runtime.sub_questions),
-            "progress": {"sources_read": runtime.sources_read,
-                         "evidence_count": runtime.evidence_count},
+            "status": status,
+            "stop_reason": stop_reason,
+            "report_id": report_id,
+            "round_no": round_no,
+            "sub_questions": sub_questions,
+            "progress": progress,
             "report_md": report_md,
             "citation_map": citation_map,
-            "seq": runtime.seq,
+            "seq": seq,
         }
 
     # ---- worker 线程 -------------------------------------------------------
@@ -259,7 +270,10 @@ class TaskManager:
         elif event == "note":
             runtime.evidence_count += 1
         elif event == "report_delta":
-            runtime.draft_md += str(payload.get("md", ""))
+            if payload.get("replace"):
+                runtime.draft_md = str(payload.get("md", ""))  # 修订整体替换
+            else:
+                runtime.draft_md += str(payload.get("md", ""))
 
     def _record_terminal(self, runtime: TaskRuntime, event: str,
                          payload: dict) -> None:

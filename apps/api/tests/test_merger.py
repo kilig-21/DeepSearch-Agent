@@ -22,6 +22,16 @@ def test_dedup_by_normalized_url():
     assert out[0].title == "A"          # 保留先出现者
 
 
+def test_same_url_different_quotes_both_kept():
+    """一页可产出多条证据(不同 quote);URL 去重只针对重复引文。"""
+    out = merge_candidates([], [
+        cand("https://docs.python.org/a", quote="片段一"),
+        cand("https://docs.python.org/a", quote="片段二"),
+    ])
+    assert len(out) == 2
+    assert out[0].origin_group_id == out[1].origin_group_id  # 同页同组
+
+
 def test_same_content_different_urls_share_origin_group():
     out = merge_candidates([], [
         cand("https://docs.python.org/a", content_hash="abc123"),

@@ -41,7 +41,7 @@ def merge_candidates(
     candidates: list[CandidateEvidence],
 ) -> list[CandidateEvidence]:
     """合并新候选入池, 返回**新增**的记录(已带 evidence_id / origin_group_id)。"""
-    seen_urls = {norm_url(e.url) for e in existing}
+    seen = {(norm_url(e.url), e.quote) for e in existing}
     group_by_hash: dict[str, str] = {
         e.content_hash: e.origin_group_id
         for e in existing if e.origin_group_id
@@ -55,9 +55,11 @@ def merge_candidates(
             key = norm_url(c.url)
         except ValueError:
             continue  # 无法归一化的 URL 丢弃
-        if key in seen_urls:
+        # 去重键 = (URL, quote):同页多条不同 quote 是合法的多条证据,
+        # 仅同页同引文(跨轮重复抓取)才视为重复
+        if (key, c.quote) in seen:
             continue
-        seen_urls.add(key)
+        seen.add((key, c.quote))
 
         group = group_by_hash.get(c.content_hash)
         if group is None:

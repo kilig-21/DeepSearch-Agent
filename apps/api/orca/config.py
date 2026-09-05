@@ -30,9 +30,12 @@ ALLOWED_DOMAINS = {"docs.python.org", "developer.mozilla.org",
 # (代理模式下由代理方解析目标, 本地 IP 校验不适用, 依赖白名单防线)
 FETCH_PROXY = os.environ.get("FETCH_PROXY") or None
 
-# 预算初始值(§3.6, Phase 0 实测回填; Phase 1A 实测后校准)
-BUDGET_TOTAL_LLM_TOKENS = 50_000
-BUDGET_WRITER_RESERVE_TOKENS = 8_000
-BUDGET_MAX_TAVILY_CREDITS = 16
-BUDGET_MAX_PAGES = 12
-BUDGET_TIME_S = 480.0  # 总时长 ≤8 分钟
+# 预算初始值(§3.6, Phase 0 实测回填; Phase 1A 实测后校准)。
+# 支持环境变量覆盖(ORCA_* 前缀), 供演示/评测构造小预算, 默认值不变。
+BUDGET_TOTAL_LLM_TOKENS = int(os.environ.get("ORCA_BUDGET_TOTAL_LLM_TOKENS", 50_000))
+BUDGET_WRITER_RESERVE_TOKENS = int(
+    os.environ.get("ORCA_BUDGET_WRITER_RESERVE_TOKENS", 8_000))
+BUDGET_MAX_TAVILY_CREDITS = int(
+    os.environ.get("ORCA_BUDGET_MAX_TAVILY_CREDITS", 16))
+BUDGET_MAX_PAGES = int(os.environ.get("ORCA_BUDGET_MAX_PAGES", 12))
+BUDGET_TIME_S = float(os.environ.get("ORCA_BUDGET_TIME_S", 480.0))  # 总时长 ≤8 分钟

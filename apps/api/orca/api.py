@@ -8,11 +8,13 @@
 """
 from __future__ import annotations
 
+import asyncio
+import json
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from . import db
@@ -27,7 +29,9 @@ class ResearchCreate(BaseModel):
     topic: str = Field(min_length=1, max_length=500)
 
 
-def create_app(*, db_path=None, tools_builder=None, budget_builder=None) -> FastAPI:
+def create_app(*, db_path=None, tools_builder=None, budget_builder=None,
+               heartbeat_interval: float = 20.0,
+               buffer_size: int = 1000) -> FastAPI:
     from .cli import _make_budget, default_tools_builder
 
     engine = db.make_engine(db_path or DB_PATH)
@@ -35,7 +39,8 @@ def create_app(*, db_path=None, tools_builder=None, budget_builder=None) -> Fast
     manager = TaskManager(
         engine,
         tools_builder=tools_builder or default_tools_builder,
-        budget_builder=budget_builder or _make_budget)
+        budget_builder=budget_builder or _make_budget,
+        buffer_size=buffer_size)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -68,6 +73,23 @@ def create_app(*, db_path=None, tools_builder=None, budget_builder=None) -> Fast
         if snap is None:
             raise HTTPException(status_code=404, detail="任务不存在")
         return snap
+
+    @app.get("/api/research/{task_id}/events")
+    async def research_events(
+        task_id: str,
+        request: Request,
+        after: int | None = None,
+    ):
+        if db.get_task(engine, task_id) is None:
+            raise HTTPException(status_code=404, detail="任务不存在")
+        last_id = _parse_last_event_id(request, after)
+        return StreamingResponse(
+            _event_stream(manager, engine, task_id, last_id,
+                          heartbeat_interval),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache",
+                     "X-Accel-Buffering": "no",
+                     "Connection": "keep-alive"})
 
     @app.post("/api/research/{task_id}/cancel", status_code=202)
     def cancel_research(task_id: str) -> dict:
@@ -106,3 +128,74 @@ def _snapshot(manager: TaskManager, engine, task_id: str) -> dict | None:
         "citation_map": citation_map,
         "seq": 0,
     }
+
+
+# ---- SSE(§3.4) --------------------------------------------------------------
+
+def _parse_last_event_id(request: Request, after: int | None) -> int | None:
+    """Last-Event-ID 头优先(浏览器自动重连携带);否则用 ?after= URL 参数。"""
+    raw = request.headers.get("last-event-id")
+    if raw is not None:
+        try:
+            return int(raw)
+        except ValueError:
+            return None
+    return after
+
+
+def _sse_frame(seq: int, event: str, payload: dict) -> str:
+    from .task_manager import iso_now
+    data = json.dumps({**payload, "ts": iso_now()}, ensure_ascii=False)
+    return f"id: {seq}\nevent: {event}\ndata: {data}\n\n"
+
+
+async def _event_stream(manager: TaskManager, engine, task_id: str,
+                        last_id: int | None, heartbeat_interval: float):
+    """SSE 事件流(§3.4 两路恢复):
+
+    - 新建连接无 last_id(刷新/视图丢失)→ 先发完整 snapshot 再接增量
+    - last_id 在环形缓冲内(普通断线)→ 从缓冲补发, 不重复不遗漏
+    - last_id 超出缓冲/超前 → 发 snapshot 对齐
+    - 终态事件发完即关闭;interrupted 等 DB 终态快照发送后关闭
+    - 断开只取消订阅, 不取消研究任务
+    """
+    runtime = manager.get_runtime(task_id)
+    if runtime is None:
+        # runtime 丢失(进程重启): DB 快照(终态或如实说明), 发完即关
+        snap = _snapshot(manager, engine, task_id)
+        yield _sse_frame(snap["seq"], "snapshot", snap)
+        return
+
+    queue: asyncio.Queue = asyncio.Queue()
+    sub_id = manager.subscribe(task_id, queue)
+    try:
+        # 恢复起点: after=0 / Last-Event-ID 落在环形缓冲内 → 直接补发;
+        # 无 last_id(刷新)或超出/超前缓冲 → 先发完整 snapshot 对齐(§3.4)
+        buffer_first = next(iter(runtime.buffer), None)
+        if last_id == 0:
+            in_buffer = True
+        elif last_id is None:
+            in_buffer = False
+        elif buffer_first is not None:
+            in_buffer = buffer_first.seq <= last_id <= runtime.seq
+        else:
+            in_buffer = last_id == runtime.seq
+        if in_buffer:
+            sent = last_id or 0
+        else:
+            snap = manager.snapshot(task_id)
+            sent = snap["seq"]
+            yield _sse_frame(sent, "snapshot", snap)
+
+        while True:
+            for record in manager.events_after(task_id, sent):
+                yield _sse_frame(record.seq, record.event, record.payload)
+                sent = record.seq
+            if runtime.terminal_recorded and sent >= runtime.seq:
+                return  # 终态帧已发出, 关闭流
+            try:
+                await asyncio.wait_for(queue.get(), timeout=heartbeat_interval)
+            except asyncio.TimeoutError:
+                yield ": ping\n\n"
+    finally:
+        manager.unsubscribe(task_id, sub_id)

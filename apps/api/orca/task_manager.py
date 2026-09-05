@@ -233,7 +233,7 @@ class TaskManager:
         record = EventRecord(
             seq=runtime.seq, event=event,
             payload={**payload, "task_id": runtime.task_id,
-                     "ts": _iso_now()})
+                     "ts": iso_now()})
         runtime.buffer.append(record)
         self._publish(runtime, record)
 
@@ -283,6 +283,6 @@ class TaskManager:
         return runtime is not None and runtime.finished.wait(timeout)
 
 
-def _iso_now() -> str:
+def iso_now() -> str:
     from datetime import UTC, datetime
     return datetime.now(UTC).isoformat(timespec="milliseconds")

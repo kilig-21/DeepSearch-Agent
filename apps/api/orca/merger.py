@@ -23,6 +23,19 @@ def _next_seq(existing: list[CandidateEvidence]) -> int:
     return max_seq
 
 
+def _next_group_seq(existing: list[CandidateEvidence]) -> int:
+    """origin_group 编号独立于 evidence_id 计数, 避免跳号。"""
+    max_seq = 0
+    for e in existing:
+        gid = e.origin_group_id or ""
+        if "_" in gid:
+            try:
+                max_seq = max(max_seq, int(gid.rsplit("_", 1)[1]))
+            except ValueError:
+                continue
+    return max_seq
+
+
 def merge_candidates(
     existing: list[CandidateEvidence],
     candidates: list[CandidateEvidence],
@@ -34,6 +47,7 @@ def merge_candidates(
         for e in existing if e.origin_group_id
     }
     seq = _next_seq(existing)
+    gseq = _next_group_seq(existing)
 
     added: list[CandidateEvidence] = []
     for c in candidates:
@@ -47,8 +61,8 @@ def merge_candidates(
 
         group = group_by_hash.get(c.content_hash)
         if group is None:
-            seq += 1
-            group = f"og_{c.content_hash[:12]}_{seq:03d}"
+            gseq += 1
+            group = f"og_{c.content_hash[:12]}_{gseq:03d}"
             group_by_hash[c.content_hash] = group
 
         seq += 1

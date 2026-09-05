@@ -53,7 +53,8 @@ def test_evidence_ids_stable_and_incremental():
 
 def test_same_url_across_rounds_not_duplicated():
     first = merge_candidates([], [cand("https://docs.python.org/a")])
-    second = merge_candidates(first, [cand("https://docs.python.org/a?utm=1")])
+    second = merge_candidates(first,
+                              [cand("https://docs.python.org/a?utm_source=1")])
     assert second == []
 
 

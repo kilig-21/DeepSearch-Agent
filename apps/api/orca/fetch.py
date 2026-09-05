@@ -1,24 +1,33 @@
-"""safe_fetch: 带基础 SSRF 防护的网页抓取(Phase 0 雏形)。
+"""safe_fetch: 带基础 SSRF 防护的网页抓取。
 
-计划书 §3.7 要求的检查点(雏形覆盖 * 标记项,Phase 1A 完善):
-* 仅 http/https
-* 拒绝私网/回环/链路本地/保留段/云元数据地址(覆盖 IPv4-mapped IPv6)
-* 每次重定向重新解析并校验(缓解 DNS 检查与连接间的 TOCTOU;
-  TODO Phase 1A: 连接复用已验证地址, 彻底消除二次解析)
-* 最大重定向跳数 / 单调用超时 / 响应体大小上限
-TODO Phase 1A: 明确代理模式下由哪一方解析目标并按同一规则校验
+计划书 §3.7 检查点:
+- 仅 http/https
+- 拒绝私网/回环/链路本地/保留段/云元数据地址(覆盖 IPv4-mapped IPv6)
+- 每跳重定向重新校验(白名单 + scheme + DNS)
+- 最大重定向跳数 / 单调用超时 / 响应体大小上限(2MB)
+
+代理模式(§3.7 解析权声明):
+- 默认直连:trust_env=False, 本地解析并校验全部目标 IP
+- 显式配置 proxy 时, 目标解析由代理方完成, 本地无法按同一规则校验 IP——
+  按计划书 §3.7 降级条款, 此时依赖白名单域名 + scheme + 跳数限制为防线,
+  此取舍已在 PLAN.md 记录
+
+已知残留(诚实声明):直连模式下"解析校验→实际连接"之间仍存在 DNS/TOCTOU
+窗口;完整消除需 transport 层 IP pinning(自定义 httpx transport + SNI),
+个人项目复杂度高。主链路强制白名单域名为当前主要防线。
 """
 from __future__ import annotations
 
 import ipaddress
 import socket
+from collections.abc import Callable
 from dataclasses import dataclass
 from urllib.parse import urljoin, urlparse
 
 import httpx
 
 ALLOWED_SCHEMES = {"http", "https"}
-MAX_REDIRECTS = 3          # 最大重定向跳数(Phase 0 初始值, 计划书 §3.6)
+MAX_REDIRECTS = 3          # 最大重定向跳数(§3.6)
 DEFAULT_TIMEOUT = 20.0      # 单调用超时(秒)
 MAX_BODY_BYTES = 2_000_000  # 响应体上限(解压后), 2MB
 
@@ -40,10 +49,7 @@ def is_blocked_ip(ip_str: str) -> bool:
 
 
 def resolve_and_check(host: str) -> list[str]:
-    """解析 host 的全部 A/AAAA 记录, 任一落在禁用网段即拒绝。
-
-    返回解析到的公网 IP 列表(Phase 1A 将用返回值直连, 消除二次解析)。
-    """
+    """解析 host 的全部 A/AAAA 记录, 任一落在禁用网段即拒绝。"""
     try:
         infos = socket.getaddrinfo(host, None)
     except socket.gaierror as e:
@@ -59,11 +65,39 @@ def resolve_and_check(host: str) -> list[str]:
     return ips
 
 
+def host_in_allowlist(host: str, allowed_domains: set[str]) -> bool:
+    return any(host == d or host.endswith("." + d) for d in allowed_domains)
+
+
+def _check_hop(
+    url: str, allowed_domains: set[str] | None, proxy: str | None
+) -> str:
+    """单跳检查:scheme / 主机名 / 白名单 / DNS(代理模式跳过)。返回主机名。"""
+    parts = urlparse(url)
+    if parts.scheme not in ALLOWED_SCHEMES:
+        raise FetchBlocked(f"仅允许 http/https, 得到: {parts.scheme or '(空)'}")
+    host = parts.hostname or ""
+    if not host:
+        raise FetchBlocked(f"URL 缺少主机名: {url}")
+    if allowed_domains is not None and not host_in_allowlist(host.lower(),
+                                                             allowed_domains):
+        raise FetchBlocked(f"域名不在白名单内(§4/§9.1): {host}")
+    if proxy is None:
+        resolve_and_check(host)
+    # 代理模式: 解析由代理方完成, 本地 IP 校验不适用(见模块 docstring 声明)
+    return host
+
+
 @dataclass
 class FetchResult:
     final_url: str
     status_code: int
     body: str  # 已按 UTF-8 解码(忽略错误)
+
+
+def _postprocess(resp, max_bytes: int) -> FetchResult:
+    return FetchResult(final_url=str(resp.url), status_code=resp.status_code,
+                       body=resp.text[:max_bytes])
 
 
 def safe_fetch(
@@ -72,25 +106,68 @@ def safe_fetch(
     max_redirects: int = MAX_REDIRECTS,
     timeout: float = DEFAULT_TIMEOUT,
     max_bytes: int = MAX_BODY_BYTES,
+    allowed_domains: set[str] | None = None,
+    proxy: str | None = None,
+    client_factory: Callable = httpx.Client,
 ) -> FetchResult:
-    """逐跳校验并抓取网页正文(不解压限制见 max_bytes)。"""
+    """逐跳校验并抓取网页正文(同步版)。"""
     current = url
-    for _hop in range(max_redirects + 1):
-        parts = urlparse(current)
-        if parts.scheme not in ALLOWED_SCHEMES:
-            raise FetchBlocked(f"仅允许 http/https, 得到: {parts.scheme or '(空)'}")
-        if not parts.hostname:
-            raise FetchBlocked(f"URL 缺少主机名: {current}")
-        resolve_and_check(parts.hostname)
-
-        with httpx.Client(timeout=timeout, follow_redirects=False) as client:
+    with client_factory(timeout=timeout, follow_redirects=False,
+                        trust_env=False, **({"proxy": proxy} if proxy else {})) as client:
+        for _hop in range(max_redirects + 1):
+            _check_hop(current, allowed_domains, proxy)
             resp = client.get(current)
-        if 300 <= resp.status_code < 400:
-            location = resp.headers.get("location")
-            if not location:
-                raise FetchBlocked(f"重定向缺失 Location: {current}")
-            current = urljoin(current, location)
-            continue
-        body = resp.text[:max_bytes]
-        return FetchResult(final_url=str(resp.url), status_code=resp.status_code, body=body)
+            if 300 <= resp.status_code < 400:
+                location = resp.headers.get("location")
+                if not location:
+                    raise FetchBlocked(f"重定向缺失 Location: {current}")
+                current = urljoin(current, location)
+                continue
+            return _postprocess(resp, max_bytes)
+    raise FetchBlocked(f"超过最大重定向跳数({max_redirects}): {url}")
+
+
+async def safe_fetch_async(
+    url: str,
+    *,
+    max_redirects: int = MAX_REDIRECTS,
+    timeout: float = DEFAULT_TIMEOUT,
+    max_bytes: int = MAX_BODY_BYTES,
+    allowed_domains: set[str] | None = None,
+    proxy: str | None = None,
+    client_factory: Callable = httpx.AsyncClient,
+) -> FetchResult:
+    """safe_fetch 异步版(reader 节点内部并发 ≤5, §3.6)。
+
+    DNS 解析(socket.getaddrinfo)为阻塞调用, 放入线程执行避免阻塞事件循环。
+    """
+    import asyncio
+
+    current = url
+    async with client_factory(timeout=timeout, follow_redirects=False,
+                              trust_env=False,
+                              **({"proxy": proxy} if proxy else {})) as client:
+        for _hop in range(max_redirects + 1):
+            parts = urlparse(current)
+            if parts.scheme not in ALLOWED_SCHEMES:
+                raise FetchBlocked(
+                    f"仅允许 http/https, 得到: {parts.scheme or '(空)'}")
+            host = parts.hostname or ""
+            if not host:
+                raise FetchBlocked(f"URL 缺少主机名: {current}")
+            if allowed_domains is not None and not host_in_allowlist(
+                    host.lower(), allowed_domains):
+                raise FetchBlocked(
+                    f"域名不在白名单内(§4/§9.1): {host}")
+            if proxy is None:
+                await asyncio.to_thread(resolve_and_check, host)
+
+            resp = await client.get(current)
+            if 300 <= resp.status_code < 400:
+                location = resp.headers.get("location")
+                if not location:
+                    raise FetchBlocked(f"重定向缺失 Location: {current}")
+                current = urljoin(current, location)
+                continue
+            return _postprocess(resp, max_bytes)
     raise FetchBlocked(f"超过最大重定向跳数({max_redirects}): {url}")

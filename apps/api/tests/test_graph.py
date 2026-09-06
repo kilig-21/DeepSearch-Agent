@@ -386,6 +386,27 @@ def test_writer_streams_delta_chunks_and_usage_settled():
     assert tools.budget.usage_snapshot()["llm_tokens"] == 600  # 4×150, 流 usage 已入账
 
 
+def test_writer_stream_max_tokens_leaves_room_for_reasoning():
+    """glm-5.3 推理型: 思考段与正文共享 max_tokens 配额——在线实测
+    (2026-09-06, conflict_typing 题 3/3 复现)8192 被思考吃穿
+    (reasoning_tokens=8163、finish_reason=length、content 0 片段),
+    流"正常"结束但正文为空。writer 必须给足输出配额(probe T9 同型:
+    reader 曾在 4096 上栽过;probe 结论即"调用必须给足 max_tokens")。"""
+    tools, events, calls = make_tools(
+        [PLANNER_JSON,
+         reader_json(["自由线程模式,可禁用全局解释器锁",
+                      "交互式解释器支持多行编辑与彩色提示"]),
+         reader_json(["错误消息更加友好"])],
+        search_results=default_search_results(),
+        llm_stream_chunks=["# 报告\n", "正文 [1]。"])
+    asyncio.run(graph.run_research(tools, "Q", task_id="t_writer_mt"))
+
+    writer_calls = [c for c in calls["llm"] if c.get("stream")]
+    assert writer_calls, "writer 应走流式"
+    assert writer_calls[0]["tier"] == "high_quality"
+    assert writer_calls[0]["max_tokens"] >= 16384
+
+
 def test_writer_stream_revision_replaces_draft():
     """流式草稿校验失败 → 修订后 emit replace 帧(前端整体替换草稿)。"""
     tools, events, calls = make_tools(

@@ -34,7 +34,10 @@ CONTROL_STOPS = {"total_budget_exhausted", "timeout", "execution_error",
 _TOP_N = 4               # searcher 每轮选 top-N(§3.2)
 _MAX_PROMPT_CHARS = 15_000   # reader 喂给 LLM 的正文截断(抓取上限仍 100k)
 _READER_MAX_TOKENS = 4096
-_WRITER_MAX_TOKENS = 8192    # glm-5.3 推理型: 必须给足覆盖思考段
+# glm-5.3 推理型: 思考段与正文共享 max_tokens(probe T9);在线实测
+# (2026-09-06 conflict_typing 题 3/3)8192 会被思考吃穿(length 截断、
+# content 0 片段)→ 提高一倍给思考留余量(probe 结论: 调用必须给足)
+_WRITER_MAX_TOKENS = 16384
 
 
 class ResearchState(TypedDict):

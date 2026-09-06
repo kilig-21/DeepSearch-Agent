@@ -63,7 +63,7 @@ cd apps/api
 - 口径:断言引用支持率(支持 1 / 部分 0.5 / 不支持 0)、答案覆盖率、失败率(**分母=全部任务**)、安全题单列;失败与无答案题不静默出分母(记 N/A)
 - 标注类指标由 AI 初标 + 人工复核产生,复核清单见 `eval/baselines/`(不静默出分)
 
-评测结果表(最新):`apps/api/eval/baselines/table_20260906_*.md`;对比实验口径与限制见 `PLAN.md` §10.4。
+最近一次全量评测(`table_20260906_final.md`):45 任务(18 道在线题 × 单轮/反思循环配对 + 9 道离线题),失败率 0.0%,全部任务在预算内停止并记录 stop_reason;总消耗 LLM tokens ≈ 35 万、Tavily credits 50。所有 stop_reason 及逐条证据见 `run_20260906_final.json`。对比实验的口径、限制与诚实结论见 `PLAN.md` §10.4 与 `eval/baselines/` 内说明。
 
 ## 安全边界
 

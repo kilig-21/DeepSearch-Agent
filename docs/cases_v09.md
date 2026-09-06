@@ -12,7 +12,7 @@
 - 关键点:反思循环的停止由确定性条件与反思判定共同收敛——LLM 判"够了"
   才停止,且预算/轮次/重复检查在其之前(翻不了案)。
 - 结果行:`completed / evidence_sufficient / 引用有效率 1.0`
-- 快照:见最新 `run_*.json` 中 `qid=fact_freethread, strategy=reflect`。
+- 快照:`run_20260906_final.json`(qid=fact_freethread, strategy=reflect)。
 
 ## 案例 2:来源部分失败 —— 失败如实记录,可用页照常出报告(fetch_partial)
 

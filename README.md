@@ -63,7 +63,9 @@ cd apps/api
 - 口径:断言引用支持率(支持 1 / 部分 0.5 / 不支持 0)、答案覆盖率、失败率(**分母=全部任务**)、安全题单列;失败与无答案题不静默出分母(记 N/A)
 - 标注类指标由 AI 初标 + 人工复核产生,复核清单见 `eval/baselines/`(不静默出分)
 
-最近一次全量评测(`table_20260906_final.md`):45 任务(18 道在线题 × 单轮/反思循环配对 + 9 道离线题),失败率 0.0%,全部任务在预算内停止并记录 stop_reason;总消耗 LLM tokens ≈ 35 万、Tavily credits 50。所有 stop_reason 及逐条证据见 `run_20260906_final.json`。对比实验的口径、限制与诚实结论见 `PLAN.md` §10.4 与 `eval/baselines/` 内说明。
+最近一次全量评测(`run_20260907_010146.json`,Phase 2 修复后基线,生产默认反思模式):27 任务(18 道在线题 + 9 道离线题),26 完成 + 1 失败(writer 阶段 LLM 读超时,失败如实落账与记录 `execution_error`,该案例催生了失败分账修复);stop_reason 分布:evidence_sufficient 13 / no_new_evidence 9 / max_rounds 2 / total_budget_exhausted 2 / execution_error 1,全部在预算内停止,逐行实耗 tokens ≤ 行上限(守门测试断言,含熔断演示题入口即停、实耗 0)。消耗分列:在线 tokens 223,703 / credits 25;离线(检索不联网)tokens 21,410 / credits 10。有报告的 20 行引用有效率全部 1.0。逐条证据与事件轨迹见快照文件。
+
+单轮 vs 反思循环的配对对比(`run_20260906_final.json`,45 行)为**初步观察**,不构成策略等效或反思无效的统计证明:该快照跨提示词/参数版本且含 3 行补跑,预算行为为修复前口径,仅作方向性参考;严谨配对需同参数版本重跑(口径见 PLAN.md §10.4)。
 
 ## 安全边界
 

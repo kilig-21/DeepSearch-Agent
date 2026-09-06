@@ -31,9 +31,13 @@ def console_emit(event: str, payload: dict) -> None:
         print(payload.get("md", ""))
         print("\n======================\n")
     elif event == "done":
+        usage = payload.get("usage") or {}
+        split = (f"(研究 {usage.get('llm_research_tokens', 0)} + "
+                 f"writer {usage.get('llm_writer_tokens', 0)})"
+                 if usage else "")
         print(f"[done] report_id={payload.get('report_id')} "
               f"stop_reason={payload.get('stop_reason')} "
-              f"tokens={payload.get('token_cost')} "
+              f"tokens={payload.get('token_cost')} {split} "
               f"credits={payload.get('credits_cost')} "
               f"耗时={payload.get('duration_s', 0):.1f}s")
     elif event == "task_failed":

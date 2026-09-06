@@ -32,7 +32,8 @@ def persist_task_results(engine, task_id: str, state: dict, budget: Budget | Non
                                credits_used=r["credits_used"])
 
     usage = budget.usage_snapshot() if budget else {
-        "llm_tokens": 0, "tavily_credits": 0, "jina_tokens": 0}
+        "llm_tokens": 0, "llm_research_tokens": 0, "llm_writer_tokens": 0,
+        "tavily_credits": 0, "jina_tokens": 0}
     return db.complete_task_with_report(
         engine, task_id,
         final_md=state.get("report_md", ""),

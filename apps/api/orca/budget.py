@@ -41,6 +41,10 @@ class Budget:
         self._started_at = clock()
 
         self.used_llm_tokens = 0
+        # 成本分账(块 2): 研究/writer tokens 分列, 总账恒为两者之和;
+        # 仅观测口径, 两级额度检查仍用 used_llm_tokens(§3.6)
+        self.used_llm_research = 0
+        self.used_llm_writer = 0
         self.used_credits = 0
         self.used_jina_tokens = 0
         self.used_pages = 0
@@ -69,6 +73,10 @@ class Budget:
             raise ValueError("tokens 不能为负")
         limit = self.total_llm_tokens if for_writer else self.research_llm_limit()
         self.used_llm_tokens += tokens
+        if for_writer:
+            self.used_llm_writer += tokens
+        else:
+            self.used_llm_research += tokens
         return self.used_llm_tokens <= limit
 
     def research_llm_limit(self) -> int:
@@ -114,6 +122,8 @@ class Budget:
     def usage_snapshot(self) -> dict:
         return {
             "llm_tokens": self.used_llm_tokens,
+            "llm_research_tokens": self.used_llm_research,
+            "llm_writer_tokens": self.used_llm_writer,
             "tavily_credits": self.used_credits,
             "jina_tokens": self.used_jina_tokens,
         }

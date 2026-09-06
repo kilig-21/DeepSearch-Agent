@@ -264,6 +264,7 @@ class TaskManager:
                 "token_cost": usage["llm_tokens"],
                 "credits_cost": usage["tavily_credits"],
                 "duration_s": state["duration_s"],
+                "usage": usage,   # 成本分账(块 2)随终态事件下发
             })
         except TaskCancelled:
             self._finish_cancelled(runtime)

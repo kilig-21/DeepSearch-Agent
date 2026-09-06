@@ -90,11 +90,13 @@ def cmd_research(topic: str, *, db_path=None, tools_builder=default_tools_builde
             # 评测 runner 经此取回本次任务结果; 禁止用 list_tasks()[-1]
             # (并发写入同一 DB 时会拿错行)
             out.update(task_id=task_id, report_id=report_id, state=state)
+        usage = budget.usage_snapshot()
         console_emit("done", {
             "report_id": report_id, "stop_reason": state.get("stop_reason"),
-            "token_cost": budget.usage_snapshot()["llm_tokens"],
-            "credits_cost": budget.usage_snapshot()["tavily_credits"],
+            "token_cost": usage["llm_tokens"],
+            "credits_cost": usage["tavily_credits"],
             "duration_s": state["duration_s"],
+            "usage": usage,   # 成本分账(块 2): 研究/writer tokens 全量随终态下发
         })
         return 0
     except KeyboardInterrupt:
@@ -114,6 +116,37 @@ def cmd_research(topic: str, *, db_path=None, tools_builder=default_tools_builde
 def _run(tools: GraphTools, topic: str, task_id: str) -> dict:
     import asyncio
     return asyncio.run(run_research(tools, topic, task_id=task_id))
+
+
+def cmd_cost(task_id: str | None = None, *, last: bool = False,
+             db_path=None) -> int:
+    """单任务成本小结(块 2): 分账数据取自 tasks.usage_json(终态落库)。"""
+    engine = db.make_engine(db_path or DB_PATH)
+    db.init_db(engine)
+    tasks = db.list_tasks(engine)
+    if not tasks:
+        print("库中暂无任务")
+        return 1
+    if task_id is not None:
+        task = next((t for t in tasks if t["id"] == task_id), None)
+        if task is None:
+            print(f"查无任务 {task_id}")
+            return 1
+    else:
+        task = tasks[-1]   # created_at 升序, 末位最新(--last 为显式声明)
+
+    u = task["usage_json"]
+    research = u.get("llm_research_tokens", 0)
+    writer = u.get("llm_writer_tokens", 0)
+    print(f"任务 {task['id']}: {task['topic']}")
+    print(f"状态: {task['status']} (stop_reason: {task['stop_reason']})")
+    print(f"LLM tokens: {u.get('llm_tokens', 0)} "
+          f"(研究 {research} + writer {writer})")
+    print(f"Tavily credits: {u.get('tavily_credits', 0)}")
+    print(f"Jina tokens: {u.get('jina_tokens', 0)}")
+    if task["report_id"]:
+        print(f"报告: #{task['report_id']}")
+    return 0
 
 
 def cmd_cleanup(*, db_path=None, assume_yes: bool = False) -> int:
@@ -143,11 +176,19 @@ def main(argv=None) -> int:
     p_research = sub.add_parser("research", help="执行一次研究任务")
     p_research.add_argument("topic", help="研究问题")
 
+    p_cost = sub.add_parser("cost", help="输出单任务成本小结(分账)")
+    p_cost.add_argument("task_id", nargs="?", default=None,
+                        help="任务 ID(缺省取最新任务)")
+    p_cost.add_argument("--last", action="store_true",
+                        help="取最新一条任务(与缺省行为一致, 显式声明)")
+
     sub.add_parser("cleanup", help="清空本地研究数据(后端停止后执行)")
 
     args = parser.parse_args(argv)
     if args.command == "research":
         return cmd_research(args.topic)
+    if args.command == "cost":
+        return cmd_cost(args.task_id, last=args.last)
     if args.command == "cleanup":
         return cmd_cleanup()
     return 2

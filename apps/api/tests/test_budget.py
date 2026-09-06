@@ -90,5 +90,30 @@ def test_usage_snapshot_for_db():
     b.settle_llm(2_757, for_writer=False)
     b.charge_credits(1)
     assert b.usage_snapshot() == {
-        "llm_tokens": 2_757, "tavily_credits": 1, "jina_tokens": 0,
+        "llm_tokens": 2_757, "llm_research_tokens": 2_757,
+        "llm_writer_tokens": 0, "tavily_credits": 1, "jina_tokens": 0,
     }
+
+
+# ---- 成本分账(块 2): tokens 按研究/writer 分列入账 -------------------------
+
+def test_settle_splits_research_and_writer():
+    """研究/writer tokens 分列记账, 总数恒为两者之和(§4 块 2)。"""
+    b = make_b()
+    b.settle_llm(1_000, for_writer=False)
+    b.settle_llm(2_000, for_writer=False)
+    b.settle_llm(750, for_writer=True)
+    assert b.used_llm_research == 3_000
+    assert b.used_llm_writer == 750
+    assert b.used_llm_tokens == 3_750            # 总账 = 分账之和
+    assert b.usage_snapshot()["llm_research_tokens"] == 3_000
+    assert b.usage_snapshot()["llm_writer_tokens"] == 750
+
+
+def test_split_accounts_do_not_change_budget_checks():
+    """分账只是观测口径: 两级额度检查仍用总账, 行为不变(§3.6)。"""
+    b = make_b(total_llm=10_000, reserve=2_000)
+    b.settle_llm(8_000, for_writer=False)
+    assert b.research_exhausted() is True
+    assert b.settle_llm(2_000, for_writer=True) is True
+    assert b.total_exhausted() is True

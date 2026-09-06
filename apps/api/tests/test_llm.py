@@ -239,3 +239,17 @@ def test_stream_missing_usage_warns_and_records_zero(patch_httpx_stream, caplog)
     assert usage_box["total_tokens"] == 0
     assert usage_box["prompt_tokens"] == 0 and usage_box["completion_tokens"] == 0
     assert "usage" in caplog.text.lower()
+
+
+def test_stream_empty_content_raises_llm_error(patch_httpx_stream):
+    """有 [DONE] 但 0 正文片段 → LLMError, 不静默。
+
+    在线实测(2026-09-06, 45 任务): GLM 偶发空响应流曾以空报告
+    completed 落库(2 例), check_report("") 放行——空回复对 writer
+    永远无意义, 必须显式失败。
+    """
+    sse = _sse_frame(USAGE_FRAME) + "data: [DONE]\n\n"
+    patch_httpx_stream(sse)
+    gen, _box = _stream_client().chat_stream([], max_tokens=1024)
+    with pytest.raises(llm.LLMError, match="空内容"):
+        list(gen)

@@ -156,6 +156,7 @@ class LLMClient:
                     body = resp.read().decode("utf-8", errors="replace")
                     raise LLMError(f"HTTP {resp.status_code}: {body[:200]}")
                 seen_done = False
+                emitted = 0
                 for line in resp.iter_lines():
                     if not line.startswith("data:"):
                         continue
@@ -178,11 +179,16 @@ class LLMClient:
                         continue
                     delta = (choices[0].get("delta") or {}).get("content")
                     if delta:
+                        emitted += 1
                         yield delta
                 if not seen_done:
                     # 正常走完但未收到 [DONE](第五轮评审 R4):半截流当
                     # 成功会落半截报告, 显式失败
                     raise LLMError("流式响应提前终止: 未收到 [DONE]")
+                if emitted == 0:
+                    # 有 [DONE] 但 0 正文片段(在线实测 GLM 偶发空响应):
+                    # 静默返回会让空报告以 completed 落库, 显式失败
+                    raise LLMError("流式响应空内容: 收到 [DONE] 但无正文片段")
             if not usage_box:
                 # usage 缺失显式处理(第五轮评审 R4):此时正文已完整交付,
                 # 报错会浪费已完成计算 → 告警并按 0 记账(低估但可审计),

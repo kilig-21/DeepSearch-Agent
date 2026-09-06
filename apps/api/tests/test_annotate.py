@@ -84,6 +84,44 @@ def test_scores_answer_coverage_over_all_questions():
     assert dist == {"covered": 1, "partial": 1, "missed": 0}
 
 
+def test_scores_count_annotations_per_strategy_row():
+    # §10.4 对比口径: 同一 qid 跑 single/reflect 两行, 各行标注独立计分,
+    # 不得按 qid 去重(否则丢掉一个策略的全部 coverage/assertions)
+    single = _annotation_row(qid="q1", stop="single_pass")
+    single["strategy"] = "single"
+    single["coverage"] = [{"point": "要点一", "mark": "covered", "note": ""}]
+    single["assertions"] = [{"text": "断言 A", "mark": "support",
+                             "evidence_ids": ["ev_001"], "note": ""}]
+    reflect = _annotation_row(qid="q1", stop="evidence_sufficient")
+    reflect["strategy"] = "reflect"
+    reflect["coverage"] = [{"point": "要点一", "mark": "missed", "note": ""}]
+    reflect["assertions"] = [{"text": "断言 B", "mark": "not_support",
+                              "evidence_ids": [], "note": ""}]
+    ann = {"questions": [single, reflect]}
+    run = {"results": [
+        _run_row(qid="q1", stop="single_pass") | {"strategy": "single"},
+        _run_row(qid="q1", stop="evidence_sufficient") | {"strategy": "reflect"},
+    ]}
+    s = annotate.score(ann, run)
+    # 两行 coverage 都计入: covered 1 + missed 0 = 1/2
+    assert s["answer_coverage"]["distribution"] == {
+        "covered": 1, "partial": 0, "missed": 1}
+    assert s["answer_coverage"]["score"] == pytest.approx(0.5)
+    # 两行 assertions 都计入: 1 + 0 = 1/2
+    assert s["assertion_support"]["distribution"] == {
+        "support": 1, "partial": 0, "not_support": 1}
+    assert s["assertion_support"]["denominator"] == 2
+    assert s["assertion_support"]["score"] == pytest.approx(0.5)
+
+
+def test_score_falls_back_to_qid_when_annotation_has_no_strategy():
+    # 兼容旧版无 strategy 字段的标注: 仍按 qid 匹配
+    ann = {"questions": [_annotation_row()]}
+    run = {"results": [_run_row() | {"strategy": "single"}]}
+    s = annotate.score(ann, run)
+    assert s["assertion_support"]["denominator"] == 3
+
+
 def test_na_question_excluded_from_quality_not_failure_rate():
     rows = [
         _annotation_row(qid="ok", stop="single_pass"),

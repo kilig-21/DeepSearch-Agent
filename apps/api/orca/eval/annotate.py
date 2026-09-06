@@ -44,6 +44,10 @@ def validate(ann: dict, run: dict) -> list[str]:
 
 def score(ann: dict, run: dict) -> dict:
     """按 §10.2 口径计分。标注缺失的题不入质量分子也不入分母(见 na_rows)。"""
+    # §10.4 对比口径: 同一 qid 的 single/reflect 是两次独立运行,
+    # 标注按 (qid, strategy) 逐行计分, 不按 qid 去重
+    ann_by_key = {(q["qid"], q.get("strategy")): q
+                  for q in ann.get("questions", [])}
     ann_by_qid = {q["qid"]: q for q in ann.get("questions", [])}
 
     coverage_scores: list[float] = []
@@ -60,7 +64,9 @@ def score(ann: dict, run: dict) -> dict:
             na_rows.append(qid)
             continue
         quality_rows.append(row)
-        a = ann_by_qid.get(qid, {})
+        a = ann_by_key.get((qid, row.get("strategy")))
+        if a is None:  # 兼容无 strategy 维度的旧版标注
+            a = ann_by_qid.get(qid, {})
         for c in a.get("coverage", []):
             cov_dist[c["mark"]] += 1
             coverage_scores.append(_COVERAGE_WEIGHT[c["mark"]])

@@ -406,3 +406,31 @@ def test_reader_rechecks_time_before_summarize():
     assert len(calls["fetch"]) == 4
     assert len(calls["llm"]) == 4          # planner + 3 页摘要, 第 4 页摘要前停
     assert len(state["evidence"]) == 3
+
+
+# ---- R3:引用修订不得绕过总预算(第五轮评审) -----------------------------------
+
+def test_revision_skips_llm_when_total_budget_exhausted():
+    """总额度恰在 writer 主调用后耗尽 → 引用修订不调模型, 走
+    degrade_citations 确定性降级 + warning 事件;实耗不越上限,
+    stop_reason 保持研究类真实值(第五轮评审 R3)。
+    llm_sides 只提供 4 侧: 修订若意外调模型将 pop 空列表报错。"""
+    b = make_budget(total_llm=600, reserve=0)  # planner150+2页300+writer150=600
+    tools, events, calls = make_tools(
+        [PLANNER_JSON,
+         reader_json(["自由线程模式,可禁用全局解释器锁",
+                      "交互式解释器支持多行编辑与彩色提示"]),
+         reader_json(["错误消息更加友好"]),
+         "结论 [5] 来自外部。"],                    # writer 主调用输出无效引用
+        search_results=default_search_results(),
+        budget=b)
+    state = asyncio.run(graph.run_research(tools, "Q", task_id="t_r3a"))
+
+    assert len(calls["llm"]) == 4                   # 修订未调模型(无第 5 侧)
+    assert "[5]" not in state["report_md"]
+    assert "未经正文核实" in state["report_md"]      # degrade_citations 结果
+    assert "结论" in state["report_md"]              # 断言未被删除
+    warnings = [p for e, p in events if e == "warning"]
+    assert any(p.get("stage") == "writer" for p in warnings)
+    assert b.usage_snapshot()["llm_tokens"] <= 600  # 实耗不越总上限
+    assert state["stop_reason"] == "single_pass"    # 研究类真实值保持不变

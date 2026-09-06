@@ -20,7 +20,7 @@ from urllib.parse import urlparse
 from langgraph.graph import END, START, StateGraph
 
 from .budget import Budget
-from .citations import check_report, revise_report
+from .citations import check_report, degrade_citations, revise_report
 from .evidence import CandidateEvidence, locate_quote, source_type_for_domain
 from .extract import ExtractedPage, ExtractError
 from .merger import merge_candidates
@@ -352,11 +352,21 @@ def make_writer(tools: GraphTools):
             if not streamed:  # 非流式: 一次性草稿帧(现状行为)
                 tools.emit("report_delta", {"md": final, "draft": True})
         else:
-            final, usage_extra = revise_report(content, evidence,
-                                               tools.llm_chat)
-            if usage_extra:
-                tools.budget.settle_llm(
-                    usage_extra.get("total_tokens", 0), for_writer=True)
+            if tools.budget.total_exhausted() or tools.budget.out_of_time():
+                # 修订要再调一次模型(第五轮评审 R3):总额度/时限已耗尽时
+                # 不得绕过总预算调模型——直接走确定性降级(移除无效引用+
+                # 句尾标注), 不调模型;stop_reason 保持研究类真实值不变
+                tools.emit("warning", {
+                    "stage": "writer",
+                    "detail": "总额度/时限已耗尽, 引用修订不调模型, "
+                              "按程序化降级处理引用"})
+                final = degrade_citations(content, evidence)
+            else:
+                final, usage_extra = revise_report(content, evidence,
+                                                   tools.llm_chat)
+                if usage_extra:
+                    tools.budget.settle_llm(
+                        usage_extra.get("total_tokens", 0), for_writer=True)
             # 修订正文与已发草稿不一致 → replace 帧让前端整体替换草稿
             tools.emit("report_delta",
                        {"md": final, "draft": True, "replace": True})

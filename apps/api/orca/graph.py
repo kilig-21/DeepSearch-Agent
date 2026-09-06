@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 from datetime import UTC, datetime
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -43,9 +44,12 @@ class ResearchState(TypedDict):
     planned_query: str
     search_results: list[SearchResult]   # 白名单内(可抓正文)
     pending_links: list[SearchResult]    # 集合外待核实链接(不抓)
+    seen_urls: list[str]                 # 跨轮已见 URL(循环不重复抓取)
     search_rounds: list[dict]
     candidate_evidence: list[CandidateEvidence]
     evidence: list[CandidateEvidence]    # merger 整体写回(§3.1)
+    last_added_count: int                # 本轮 merger 新增证据数(§3.5 判定用)
+    next_queries: list[str]              # reflector 产出的下一轮查询(§3.1)
     round_no: int
     stop_reason: str | None
     report_md: str
@@ -64,6 +68,8 @@ class GraphTools:
     # (messages, *, max_tokens, tier) -> (片段迭代器, usage 容器);writer 流式
     llm_chat_stream: Callable | None = None
     max_pages_per_round: int = _TOP_N
+    reflect: bool = True        # Phase 2 反思循环开关(§3.2);False=单轮对比模式
+    max_rounds: int = 3         # 轮次上限(§3.1)
     events: list = field(default_factory=list)  # 仅供工具调试
 
 
@@ -143,7 +149,9 @@ def make_searcher(tools: GraphTools):
         if not tools.budget.charge_credits(1):  # 预占 1 credit, 失败不出手
             return {"stop_reason": "budget_exhausted"}
 
-        query = state.get("planned_query") or state["topic"]
+        # 反思循环轮次消费 reflector 产出的查询(§3.2);首轮用 planner 查询
+        nq = state.get("next_queries") or []
+        query = nq[0] if nq else (state.get("planned_query") or state["topic"])
         try:
             results, credits = tools.search_fn(query, limit=8)
         except Exception as e:  # noqa: BLE001
@@ -151,17 +159,22 @@ def make_searcher(tools: GraphTools):
                                    "detail": f"搜索失败: {e}"})
             return {"stop_reason": "no_new_evidence"}
 
-        merged = dedup(list(state.get("search_results", [])) + results)
-        allowed, outside = split_by_allowlist(merged, tools.allowed_domains)
+        # 循环模式跨轮去重(§3.2):仅本轮新发现的 URL 喂 reader——已抓页
+        # 不重复抓取/摘要(控制 token);事件与轮记录只展示本轮结果
+        seen = set(state.get("seen_urls", []))
+        fresh = [r for r in results if r.url not in seen]
+        seen.update(r.url for r in results)
+        allowed, outside = split_by_allowlist(fresh, tools.allowed_domains)
         tools.emit("search", {"round": state["round_no"], "query": query,
                               "results": [{"url": r.url, "title": r.title}
-                                          for r in merged],
+                                          for r in dedup(results)],
                               "credits_used": credits})
         rounds = list(state.get("search_rounds", [])) + [{
             "round_no": state["round_no"], "query": query,
-            "result_count": len(merged), "credits_used": credits}]
-        return {"search_results": allowed, "pending_links": outside,
-                "search_rounds": rounds}
+            "result_count": len(dedup(results)), "credits_used": credits}]
+        pending = list(state.get("pending_links", [])) + outside
+        return {"search_results": allowed, "pending_links": dedup(pending),
+                "search_rounds": rounds, "seen_urls": sorted(seen)}
     return searcher
 
 
@@ -268,8 +281,110 @@ def make_merger(tools: GraphTools):
                                 "origin_group_id": e.origin_group_id,
                                 "url": e.url, "title": e.title,
                                 "point": e.point})
-        return {"evidence": existing + added}
+        return {"evidence": existing + added, "last_added_count": len(added)}
     return merger
+
+
+# ---- reflector(Phase 2, §3.2/§3.5)------------------------------------------
+
+_QUERY_NOISE_RE = re.compile(
+    r"[\s?？!！,，.。;；:：'\"“”‘’()（）\[\]【】]+")
+
+
+def _norm_query(q: str) -> str:
+    """查询近似重复判定用规范化:去空白/常见中英标点 + 小写。"""
+    return _QUERY_NOISE_RE.sub("", q).lower()
+
+
+_MAX_NEXT_QUERIES = 3     # reflector 产出的下一轮查询条数上限(§3.7)
+_MAX_QUERY_CHARS = 200
+
+
+def make_reflector(tools: GraphTools):
+    """merger 后评估证据覆盖度, 决定继续检索或收尾(§3.5)。
+
+    确定性停止条件(全部满足才进入下一轮):预算未耗尽、本轮有新增有效
+    证据、未达轮次上限、新查询与历史不近似重复——任一不满足即按对应
+    stop_reason 终止,**不调用反思模型**;LLM 的"我觉得还不够"只能建议,
+    不能越过这些条件。控制类 stop(§3.4)优先透传。
+    """
+    def reflector(state: ResearchState) -> dict:
+        # 1. 控制类优先(§3.4):取消/超时/总额度直接决定终态
+        stop = _control_stop(state, tools.budget)
+        if stop:
+            return {"stop_reason": stop, "next_queries": []}
+        # 2. 研究额度耗尽(两级规则 §3.6)→ 停止研究走 writer, 不调模型
+        if tools.budget.research_exhausted():
+            return {"stop_reason": "budget_exhausted", "next_queries": []}
+        # 3. 本轮无新增有效证据 → 再搜同类查询无意义(确定性, LLM 翻不了案)
+        if not state.get("last_added_count"):
+            return {"stop_reason": "no_new_evidence", "next_queries": []}
+        # 4. 轮次上限(§3.1)——只表示停止, 不代表证据充分
+        if state["round_no"] >= tools.max_rounds:
+            return {"stop_reason": "max_rounds", "next_queries": []}
+
+        ev_lines = [f"- {e.point[:120]}({e.domain})"
+                    for e in state.get("evidence", [])]
+        used = [r.get("query", "") for r in state.get("search_rounds", [])]
+        prompt = (
+            "你是研究反思器。评估已有证据是否足以回答用户问题;若不足,"
+            "给出 1~3 条**下一轮搜索查询**用于补齐证据缺口(不得与已执行"
+            "查询近似重复)。只输出 JSON:\n"
+            '{"sufficient": true/false, "next_queries": ["..."]}\n\n'
+            f"用户问题: {state['topic']}\n"
+            f"子问题: {state.get('sub_questions', [])}\n"
+            f"已执行查询: {used}\n"
+            f"证据池({len(state.get('evidence', []))} 条要点):\n"
+            + ("\n".join(ev_lines) or "(空)"))
+        try:
+            result = tools.llm_chat(
+                [{"role": "user", "content": prompt}],
+                max_tokens=_READER_MAX_TOKENS, tier="daily",
+                reasoning_effort="low")  # 机械评估任务, 压制思考省配额
+        except Exception as e:  # noqa: BLE001
+            tools.emit("warning", {"stage": "reflector",
+                                   "detail": f"反思失败: {e}"})
+            return {"next_queries": []}   # 退化单轮收尾, writer 兜底 stop_reason
+        tools.budget.settle_llm(result.usage.get("total_tokens", 0),
+                                for_writer=False)
+
+        obj = _json_obj(result.content)
+        if obj is None:
+            tools.emit("warning", {"stage": "reflector",
+                                   "detail": "反思输出无法解析, 停止研究"})
+            return {"next_queries": []}
+
+        if obj.get("sufficient"):
+            tools.emit("reflection", {
+                "round": state["round_no"], "decision": "stop",
+                "sufficient": True, "next_queries": []})
+            return {"stop_reason": "evidence_sufficient", "next_queries": []}
+
+        queries, seen = [], {_norm_query(q) for q in used}
+        raw = [q for q in (str(x).strip()[:_MAX_QUERY_CHARS]
+                           for x in obj.get("next_queries", [])) if q]
+        for q in raw[:_MAX_NEXT_QUERIES]:
+            if _norm_query(q) not in seen:
+                seen.add(_norm_query(q))
+                queries.append(q)
+        if not queries:
+            if raw:
+                # 给出的查询全部与历史近似重复 → 无新信息可搜(§3.4)
+                return {"stop_reason": "duplicate_queries", "next_queries": []}
+            # 判不足却给不出查询 → 无处可搜, 退化单轮收尾
+            tools.emit("warning", {"stage": "reflector",
+                                   "detail": "反思未产出有效新查询, 停止研究"})
+            return {"next_queries": []}
+        tools.emit("reflection", {
+            "round": state["round_no"], "decision": "continue",
+            "sufficient": False, "next_queries": queries})
+        return {"next_queries": queries, "round_no": state["round_no"] + 1}
+    return reflector
+
+
+def _route_after_reflection(state: ResearchState) -> str:
+    """条件边(§3.2):有 next_queries → searcher 继续;否则 → writer 收尾。"""
+    return "searcher" if state.get("next_queries") else "writer"
 
 
 def _program_note(state: ResearchState, reason: str) -> str:
@@ -394,7 +509,13 @@ def build_graph(tools: GraphTools):
     g.add_edge("planner", "searcher")
     g.add_edge("searcher", "reader")
     g.add_edge("reader", "merger")
-    g.add_edge("merger", "writer")
+    if tools.reflect:   # Phase 2 反思循环(§3.2):merger → reflector → 条件边
+        g.add_node("reflector", make_reflector(tools))
+        g.add_edge("merger", "reflector")
+        g.add_conditional_edges("reflector", _route_after_reflection,
+                                {"searcher": "searcher", "writer": "writer"})
+    else:               # 单轮对比模式(§10.4), 与 Phase 1 线性链一致
+        g.add_edge("merger", "writer")
     g.add_edge("writer", END)
     return g.compile()
 
@@ -405,7 +526,9 @@ async def run_research(tools: GraphTools, topic: str, *, task_id: str) -> dict:
     init: ResearchState = {
         "topic": topic, "task_id": task_id, "sub_questions": [],
         "planned_query": "", "search_results": [], "pending_links": [],
-        "search_rounds": [], "candidate_evidence": [], "evidence": [],
+        "seen_urls": [], "search_rounds": [], "candidate_evidence": [],
+        "evidence": [],
+        "last_added_count": 0, "next_queries": [],
         "round_no": 1, "stop_reason": None, "report_md": "",
         "citation_map": {},
     }

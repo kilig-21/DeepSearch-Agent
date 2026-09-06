@@ -15,6 +15,11 @@ def fake_llm_chat(messages, *, max_tokens, tier, reasoning_effort=None):
         payload = {"sub_questions": ["子问题一"], "query": "固定查询"}
         return LLMResult(content=json.dumps(payload, ensure_ascii=False),
                          usage=dict(USG))
+    if "研究反思器" in content:
+        # 反思判充分(单轮收尾): 离线固定材料无第二轮增量可给
+        payload = {"sufficient": True, "next_queries": []}
+        return LLMResult(content=json.dumps(payload, ensure_ascii=False),
+                         usage=dict(USG))
     if "正文:" in content:  # reader: 从 prompt 正文截取 quote(必可定位)
         body = content.split("正文:")[-1].strip()
         quote = body[:60]

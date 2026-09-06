@@ -41,16 +41,28 @@ def make_budget(total_llm=200_000, reserve=8_000, credits=16, pages=12,
 
 
 def make_tools(llm_sides, search_results=None, fetch_failures=None,
-               budget=None, search_error=None, llm_stream_chunks=None):
+               budget=None, search_error=None, llm_stream_chunks=None,
+               *, reflect=False, reflect_sides=None, search_sides=None,
+               pages=None, max_rounds=3):
     """llm_sides: 按调用序返回的 content 列表;fetch_failures: {url: Exception};
-    llm_stream_chunks: writer 流式片段列表(提供时 writer 走流式)。"""
+    llm_stream_chunks: writer 流式片段列表(提供时 writer 走流式)。
+    reflect: 反思循环开关。**本文件与 1B 既有测试默认 False(线性链路回归,
+    与 Phase 1 行为一致)**;循环行为测试(test_reflector.py)必须显式传
+    reflect=True —— 忘传时 reflect_sides 不会被消费, 断言显式失败不假绿。
+    reflect_sides: reflector 专用输出队列(按 prompt 含"研究反思器"分派)。
+    search_sides: 按搜索调用序返回的结果列表(多轮测试用);pages: URL→正文映射。"""
     calls = {"llm": [], "fetch": [], "search": []}
     usage = {"prompt_tokens": 100, "completion_tokens": 50, "total_tokens": 150}
+    reflect_sides = list(reflect_sides or [])
 
     def llm_chat(messages, *, max_tokens, tier, reasoning_effort=None):
         calls["llm"].append({"tier": tier, "max_tokens": max_tokens,
                              "messages": messages})
-        content = llm_sides.pop(0)
+        prompt = messages[-1]["content"]
+        if "研究反思器" in prompt:
+            content = reflect_sides.pop(0)
+        else:
+            content = llm_sides.pop(0)
         if isinstance(content, Exception):
             raise content
         return LLMResult(content=content, usage=dict(usage))
@@ -67,19 +79,24 @@ def make_tools(llm_sides, search_results=None, fetch_failures=None,
 
         return gen(), usage_box
 
+    search_sides = list(search_sides) if search_sides is not None else None
+
     def search_fn(query, *, limit):
         calls["search"].append(query)
         if search_error is not None:
             raise search_error
+        if search_sides is not None:
+            return (search_sides.pop(0), 1)
         return (search_results or [], 1)
 
     async def fetch_async(url, *, allowed_domains=None, proxy=None):
         calls["fetch"].append(url)
         if fetch_failures and url in fetch_failures:
             raise fetch_failures[url]
-        text = {"https://docs.python.org/a": PAGE_A,
-                "https://docs.python.org/b": PAGE_B}[url]
-        return ExtractedPage(url=url, final_url=url, text=text)
+        page_map = pages if pages is not None else {
+            "https://docs.python.org/a": PAGE_A,
+            "https://docs.python.org/b": PAGE_B}
+        return ExtractedPage(url=url, final_url=url, text=page_map[url])
 
     events = []
     return graph.GraphTools(
@@ -87,7 +104,7 @@ def make_tools(llm_sides, search_results=None, fetch_failures=None,
         llm_chat_stream=llm_chat_stream if llm_stream_chunks else None,
         search_fn=search_fn, fetch_async=fetch_async,
         budget=budget or make_budget(), emit=lambda e, p: events.append((e, p)),
-        allowed_domains=ALLOWED,
+        allowed_domains=ALLOWED, reflect=reflect, max_rounds=max_rounds,
     ), events, calls
 
 

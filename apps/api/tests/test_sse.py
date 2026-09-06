@@ -305,6 +305,147 @@ def test_snapshot_then_replay_gapless_under_publish_race(tmp_path):
     assert joined == "# 标题\n正文 [1]。\n更多 [2]。\n"
 
 
+# ---- R2: 循环中途游标被挤出 → snapshot 重对齐(测试类3) --------------------------
+
+async def _stream_sse_lines_realtime(app, path, *, headers=None,
+                                     stop=None, idle_timeout=15.0):
+    """真增量 SSE 读取:直接桥接 ASGI send 消息, 每条消息即刻可读。
+
+    TestClient.stream / httpx ASGITransport 都会把整个响应体缓冲到
+    ASGI app 跑完才返回——拿到的是"事后回放", 无法构造读端与生产者的
+    真并发窗口(假测试)。此 helper 逐条消费 send 消息, 读端每收到一行
+    即调用 stop(lines)(返回 True 则断开), 空闲 idle_timeout 兜底防挂。"""
+    raw_headers = [(k.lower().encode(), v.encode())
+                   for k, v in (headers or {}).items()]
+    scope = {
+        "type": "http", "asgi": {"version": "3.0", "spec_version": "2.3"},
+        "http_version": "1.1", "method": "GET",
+        "scheme": "http", "path": path, "raw_path": path.encode(),
+        "query_string": b"", "root_path": "", "headers": raw_headers,
+        "client": ("testclient", 50000), "server": ("testserver", 80),
+    }
+    messages: asyncio.Queue = asyncio.Queue()
+    disconnect = asyncio.Event()
+
+    async def send(msg):
+        await messages.put(msg)
+
+    async def receive():
+        # 必须挂起等待: 立即返回会让 Starlette listen_for_disconnect 忙轮询,
+        # 饿死整个事件循环(假死, wait_for 超时都不触发)
+        await disconnect.wait()
+        return {"type": "http.disconnect"}
+
+    task = asyncio.ensure_future(app(scope, receive, send))
+    lines: list[str] = []
+    buf = b""
+    try:
+        while True:
+            msg = await asyncio.wait_for(messages.get(), timeout=idle_timeout)
+            if msg["type"] != "http.response.body":
+                continue
+            buf += msg.get("body", b"")
+            while b"\n" in buf:
+                raw, buf = buf.split(b"\n", 1)
+                lines.append(raw.decode("utf-8").rstrip("\r"))
+                if stop is not None and stop(lines):
+                    return lines
+            if not msg.get("more_body", False):
+                break
+    finally:
+        task.cancel()
+        try:
+            await task
+        except BaseException:  # noqa: BLE001 - 取消/已完成均按断开处理
+            pass
+    return lines
+
+
+def test_sse_realigns_with_snapshot_when_cursor_evicted_midstream(tmp_path):
+    """R2 端到端(真增量流):小缓冲(maxlen=3)下, 客户端以缓冲内游标
+    恢复并收完首批补发后, 生产者继续推进把游标挤出环形缓冲 → SSE 流
+    必须转为完整 snapshot 重对齐, 不得把跳过缺口的尾部事件当补发直接发出。"""
+    gate, release = threading.Event(), threading.Event()
+
+    def builder(budget):
+        return _done_builder(_writer_block_tools(gate, release))(budget)
+
+    with _make_client(tmp_path, builder=builder, buffer_size=3) as client:
+        app = client.app_obj
+        mgr = client.app_state.manager
+        task_id = client.post("/api/research", json={"topic": "Q"}).json()["task_id"]
+        assert gate.wait(5)  # writer 已阻塞, 此前事件全部落缓冲
+
+        # 放行后每个真实事件追加 4 条 padding, 把游标挤出 maxlen=3 缓冲
+        orig_record = mgr._record
+        state = {"released": False, "armed": True}
+
+        def padded(rt, event, payload):
+            orig_record(rt, event, payload)
+            if state["released"] and event != "progress" and state["armed"]:
+                state["armed"] = False
+                for i in range(4):
+                    orig_record(rt, "progress", {"n": f"pad{i}"})
+
+        def frames_so_far(lines):
+            count, seen = 0, False
+            for ln in lines:
+                if ln == "":
+                    if seen:
+                        count += 1
+                        seen = False
+                elif ln.startswith("event: "):  # 注释帧(心跳)不计
+                    seen = True
+            return count
+
+        async def scenario() -> list[str]:
+            # 探针连接: 无游标读 snapshot 一帧即断, 取当前 seq(真增量)
+            probe = await _stream_sse_lines_realtime(
+                app, f"/api/research/{task_id}/events",
+                stop=lambda ls: frames_so_far(ls) >= 1)
+            probe_frames = parse_sse(probe)
+            seq = probe_frames[0]["id"]
+            runtime = mgr._runtimes[task_id]
+            assert seq == runtime.seq and seq >= 3  # writer 阻塞中, 未再推进
+
+            # 正式连接: 游标=seq-2(缓冲首条) → replay 补发 seq-1、seq;
+            # 第 2 帧收完立即放行生产者(padding 随后把游标挤出缓冲)
+            def on_line(lines):
+                ln = lines[-1]
+                if ln == "" and frames_so_far(lines) >= 2 \
+                        and not state["released"]:
+                    state["released"] = True
+                    mgr._record = padded
+                    release.set()
+                return False  # 从不断开: 一路读到流自然关闭
+
+            return (await _stream_sse_lines_realtime(
+                app, f"/api/research/{task_id}/events",
+                headers={"Last-Event-ID": str(seq - 2)}, stop=on_line), seq)
+
+        lines, seq0 = asyncio.run(scenario())
+        assert state["released"], "未在首批补发收完后触发生产者推进(时序失败)"
+        mgr._record = orig_record
+        mgr.wait(task_id, timeout=10)
+        final_seq = mgr._runtimes[task_id].seq
+
+    replayed = [f for f in parse_sse(lines) if "id" in f]
+    # 首批补发 = seq0-1、seq0(replay 路径, 无 snapshot; writer 阻塞时的 seq)
+    assert [f["id"] for f in replayed[:2]] == [seq0 - 1, seq0]
+    assert all(f["event"] != "snapshot" for f in replayed[:2])
+    # 缺口被检出: 之后的第一帧是 snapshot 重对齐(而非 seq0+1.. 的跳帧补发)
+    assert replayed[2]["event"] == "snapshot", \
+        f"游标被挤出后必须 snapshot 重对齐, 实际: {[f['event'] for f in replayed]}"
+    realigned = replayed[2]
+    # 对齐点在缺口之后、最终 seq 之前或相等(取决于 snapshot 取得瞬间
+    # 生产者推进到哪; 若在 done 入缓冲前取, 随后仍会补发 done 帧)
+    assert seq0 + 2 <= realigned["id"] <= final_seq
+    # 重对齐帧之后只有更新的事件帧(无跳帧回补)
+    assert all(f["id"] > realigned["id"] for f in replayed[3:] if "id" in f)
+    # 最终收到终态(done 帧或终态 snapshot)
+    assert replayed[-1]["event"] in ("done", "snapshot")
+
+
 # ---- 终态与心跳 ----------------------------------------------------------------
 
 def test_heartbeat_sent_when_idle(tmp_path):

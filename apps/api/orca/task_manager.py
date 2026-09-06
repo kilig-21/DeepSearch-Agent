@@ -145,82 +145,94 @@ class TaskManager:
         with self._lock:  # 与写入端同一临界区: 读到的 seq/缓冲一致(P4)
             return [e for e in runtime.buffer if e.seq > last_seq]
 
-    def drain(self, task_id: str, sent: int) -> tuple[list[EventRecord], bool]:
-        """SSE 循环取数(第五轮评审 R1):事件副本、终态标志、seq 在**同一
-        锁临界区**内读取, 返回 (sent 之后的事件, terminal_visible)。
+    def drain(self, task_id: str,
+              sent: int) -> tuple[list[EventRecord], bool, bool]:
+        """SSE 循环取数(第五轮评审 R1/R2):事件副本、终态标志、seq、
+        缺口判定在**同一锁临界区**内完成, 返回 (sent 之后的事件,
+        terminal_visible, gap)。
 
-        terminal_visible 仅当"终态标志已置且 sent 已追上当前 seq"——
-        此时缓冲中不可能再有未取的终态事件, SSE 端可安全关闭。
-        SSE 端不得再锁外裸读 runtime 字段判断关闭(裸读可见
-        "标志=True、seq 仍旧值"的中间态, 会漏发终态帧)。"""
+        - terminal_visible 仅当"终态标志已置且 sent 已追上当前 seq"——
+          此时缓冲中不可能再有未取的终态事件, SSE 端可安全关闭。
+          SSE 端不得锁外裸读 runtime 字段判断关闭(裸读可见
+          "标志=True、seq 仍旧值"的中间态, 会漏发终态帧)。
+        - gap=True 当 sent+1 落在缓冲覆盖范围之前(游标已被环形缓冲
+          挤出):按序补发必然跳帧, 调用方必须放弃增量、转完整
+          snapshot 重对齐后继续, 不得直接补发。"""
         runtime = self._runtimes.get(task_id)
         if runtime is None:
-            return ([], True)  # runtime 已消失: 不会有更多事件
+            return ([], True, False)  # runtime 已消失: 不会有更多事件
         with self._lock:
+            buffer_first = next(iter(runtime.buffer), None)
+            gap = buffer_first is not None and sent >= 0 \
+                and buffer_first.seq > sent + 1
             events = [e for e in runtime.buffer if e.seq > sent]
             terminal_visible = runtime.terminal_recorded and sent >= runtime.seq
-            return (events, terminal_visible)
+            return (events, terminal_visible, gap)
 
-    def resume_plan(self, task_id: str,
-                    last_id: int | None) -> tuple[str, int]:
-        """SSE 恢复决策(§3.4 两路恢复; 第四轮评审 P4, 同一临界区原子判定):
+    def resume(self, task_id: str, last_id: int | None) -> tuple[str, int, object]:
+        """SSE 恢复(§3.4 两路恢复; 第四轮 P4 判定原子化 + 第五轮 R2
+        判定与首批取数合并同一临界区):
 
-        - ("snapshot", seq):无游标(含 0/负数)或游标超出缓冲覆盖范围 →
-          客户端须先收完整 snapshot 对齐到当前 seq
-        - ("replay", last_id):游标落在缓冲覆盖范围内 → 从缓冲补发增量
+        - ("missing", 0, None):runtime 已消失(进程重启), 调用方走 DB 快照
+        - ("snapshot", seq, fields):无游标(含 0/负数)或游标超出缓冲
+          覆盖范围 → fields 为同一临界区取全的快照字段, 客户端先收
+          完整 snapshot 对齐到 seq
+        - ("replay", last_id, events):游标落在缓冲覆盖范围内 → events
+          为同一临界区复制的 last_id 之后事件, 直接补发
 
-        任何路径都不允许"仅凭客户端 seq 请求增量"。"""
-        runtime = self._runtimes.get(task_id)
-        if runtime is None:
-            return ("missing", 0)
+        判定与取数在同一锁内完成, 生产者无法在两者之间把游标挤出
+        缓冲;SSE 端不得自行触碰 runtime.buffer。"""
         with self._lock:
+            runtime = self._runtimes.get(task_id)
+            if runtime is None:
+                return ("missing", 0, None)
             seq = runtime.seq
             buffer_first = next(iter(runtime.buffer), None)
-            if last_id is None or last_id <= 0:      # 无游标(0 视同无游标)
-                return ("snapshot", seq)
-            if buffer_first is not None and \
-                    buffer_first.seq <= last_id <= seq:  # 覆盖范围内 → 补发
-                return ("replay", last_id)
-            return ("snapshot", seq)                 # 超出/超前 → 对齐
+            if last_id is not None and last_id > 0 and buffer_first is not None \
+                    and buffer_first.seq <= last_id <= seq:  # 覆盖内 → 补发
+                return ("replay", last_id,
+                        [e for e in runtime.buffer if e.seq > last_id])
+            fields = self._runtime_fields_locked(runtime)
+        return ("snapshot", fields["seq"], self._finalize_snapshot(fields))
 
     # ---- 快照(§3.4 v1.3 扩充结构) -----------------------------------------
 
+    def _runtime_fields_locked(self, runtime: TaskRuntime) -> dict:
+        """须持锁调用:一次取全快照字段——正文/进度/seq 对应同一时点
+        (第五轮评审 R2:resume 与 snapshot 共用, 避免嵌套取锁)。"""
+        return {
+            "task_id": runtime.task_id,
+            "status": runtime.status,
+            "stop_reason": runtime.stop_reason,
+            "report_id": runtime.report_id,
+            "round_no": runtime.round_no,
+            "sub_questions": list(runtime.sub_questions),
+            "progress": {"sources_read": runtime.sources_read,
+                         "evidence_count": runtime.evidence_count},
+            "report_md": runtime.draft_md,
+            "citation_map": {},
+            "seq": runtime.seq,
+        }
+
+    def _finalize_snapshot(self, fields: dict) -> dict:
+        """锁外补读(锁内不做 IO):completed 时以 DB 权威正文/引用映射
+        覆盖;cancelled/failed/interrupted 草稿已在终态临界区清空 → 如实为空。"""
+        if fields["status"] == "completed" and fields["report_id"] is not None:
+            report = db.get_report(self._engine, fields["report_id"])
+            if report:
+                fields["report_md"] = report["final_md"]
+                fields["citation_map"] = report["citation_map_json"]
+        return fields
+
     def snapshot(self, task_id: str) -> dict | None:
-        """状态快照(§3.4 v1.3; 第四轮评审 P3):正文/进度/seq 在同一锁
-        临界区内一次取全, 三者对应同一时点;running 且有草稿时 report_md
-        必须是已生成正文(刷新恢复不丢草稿)。DB 读在锁外(锁内不做 IO)。"""
+        """状态快照(§3.4 v1.3; 第四轮评审 P3):字段在同一锁临界区内
+        一次取全;DB 读在锁外(锁内不做 IO)。"""
         with self._lock:
             runtime = self._runtimes.get(task_id)
             if runtime is None:
                 return None
-            status = runtime.status
-            report_id = runtime.report_id
-            report_md = runtime.draft_md
-            citation_map: dict = {}
-            progress = {"sources_read": runtime.sources_read,
-                        "evidence_count": runtime.evidence_count}
-            sub_questions = list(runtime.sub_questions)
-            round_no = runtime.round_no
-            stop_reason = runtime.stop_reason
-            seq = runtime.seq
-        if status == "completed" and report_id is not None:
-            report = db.get_report(self._engine, report_id)
-            if report:
-                report_md = report["final_md"]
-                citation_map = report["citation_map_json"]
-        # cancelled/failed/interrupted: 草稿已在终态临界区清空 → 如实为空
-        return {
-            "task_id": task_id,
-            "status": status,
-            "stop_reason": stop_reason,
-            "report_id": report_id,
-            "round_no": round_no,
-            "sub_questions": sub_questions,
-            "progress": progress,
-            "report_md": report_md,
-            "citation_map": citation_map,
-            "seq": seq,
-        }
+            fields = self._runtime_fields_locked(runtime)
+        return self._finalize_snapshot(fields)
 
     # ---- worker 线程 -------------------------------------------------------
 

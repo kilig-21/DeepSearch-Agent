@@ -176,8 +176,9 @@ async def _event_stream(manager: TaskManager, engine, task_id: str,
       snapshot 对齐, 再接增量——不凭客户端 seq 从头补发
     - Last-Event-ID 落在环形缓冲覆盖范围内(普通断线)→ 从缓冲补发增量
     - 超出/超前缓冲覆盖 → 回退完整 snapshot 对齐
-    - 恢复决策与 seq/缓冲读取同一临界区(manager.resume_plan),
-      消除 snapshot 与事件发布的竞争
+    - 恢复决策与首批事件/快照字段同一临界区(manager.resume);
+      每批取数带缺口检测, 游标被环形缓冲挤出时转 snapshot 重对齐
+      (第五轮评审 R2, SSE 端不触碰 runtime.buffer)
     - 终态事件发完即关闭;interrupted 等 DB 终态快照发送后关闭
     - 断开只取消订阅, 不取消研究任务
     """
@@ -191,17 +192,34 @@ async def _event_stream(manager: TaskManager, engine, task_id: str,
     queue: asyncio.Queue = asyncio.Queue()
     sub_id = manager.subscribe(task_id, queue)
     try:
-        mode, from_seq = manager.resume_plan(task_id, last_id)
+        # R2: 恢复判定与首批事件/快照字段同一锁临界区取得
+        mode, from_seq, data = manager.resume(task_id, last_id)
         if mode == "snapshot":
-            snap = manager.snapshot(task_id)
+            snap = data  # 锁内取全字段, completed 已锁外补读 DB 权威正文
             sent = snap["seq"]
             yield _sse_frame(sent, "snapshot", snap)
-        else:  # replay: 缓冲覆盖范围内, 从游标之后补发
+        elif mode == "replay":  # 缓冲覆盖范围内, 从游标之后补发首批
             sent = from_seq
+            for record in data:
+                yield _sse_frame(record.seq, record.event, record.payload)
+                sent = record.seq
+        else:  # missing: 订阅瞬间 runtime 被清(终态收尾), 走 DB 快照
+            snap = _snapshot(manager, engine, task_id)
+            yield _sse_frame(snap["seq"], "snapshot", snap)
+            return
 
         while True:
-            # R1: 事件副本与终态可见性同一临界区取得, 不再裸读 runtime 字段
-            events, terminal_visible = manager.drain(task_id, sent)
+            # R1/R2: 事件副本、终态可见性、缺口判定同一临界区取得
+            events, terminal_visible, gap = manager.drain(task_id, sent)
+            if gap:
+                # 游标已被环形缓冲挤出 → 按序补发必跳帧, 放弃增量,
+                # 转完整 snapshot 重对齐后继续(不得直接补发)
+                snap = manager.snapshot(task_id)
+                if snap is None:
+                    return
+                sent = snap["seq"]
+                yield _sse_frame(sent, "snapshot", snap)
+                continue
             for record in events:
                 yield _sse_frame(record.seq, record.event, record.payload)
                 sent = record.seq

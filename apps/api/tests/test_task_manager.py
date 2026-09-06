@@ -380,7 +380,7 @@ def test_drain_never_sees_flag_without_terminal_event(tmp_path):
     reader_result: dict = {}
 
     def reader():
-        reader_result["events"], reader_result["tv"] = mgr.drain("t_r1", 1)
+        reader_result["events"], reader_result["tv"], _ = mgr.drain("t_r1", 1)
         reader_done.set()
 
     threading.Thread(target=reader, daemon=True).start()
@@ -398,8 +398,94 @@ def test_drain_never_sees_flag_without_terminal_event(tmp_path):
         assert any(e.event == "cancelled" for e in events)
 
     # 追平后 drain:终态已入缓冲, tv=True 且事件空——安全关闭
-    events2, tv2 = mgr.drain("t_r1", 2)
-    assert events2 == [] and tv2 is True
+    events2, tv2, _gap = mgr.drain("t_r1", 2)
+    assert events2 == [] and tv2 is True and _gap is False
+
+
+# ---- R2: 恢复判定与取数合并临界区 + 每批缺口检测 -------------------------------
+
+def test_resume_replay_atomic_against_buffer_eviction(tmp_path):
+    """R2 恢复竞争:resume 的游标判定与首批事件复制在同一锁临界区完成,
+    返回的副本必然从 last_id+1 连续开始——即使随后生产者推进把游标挤出
+    环形缓冲, 也不会重现旧实现"判定 replay 后再取数只拿到剩余尾部"的
+    丢帧窗口(副本先于挤出已在锁内复制完毕)。"""
+    from collections import deque
+    engine = db.make_engine(tmp_path / "o.db")
+    db.init_db(engine)
+    mgr = _make_manager(engine, lambda budget: None)
+    runtime = mgr._runtime_for_test(task_id="t_r2", topic="Q")
+    runtime.buffer = deque(maxlen=3)  # 小缓冲放大挤出效应
+    for i in range(3):
+        mgr._record(runtime, "progress", {"n": i + 1})  # seq 1..3
+
+    # 游标 1 在覆盖范围内 → replay, 首批副本 = 2、3(判定与取数同临界区)
+    mode, from_seq, events = mgr.resume("t_r2", 1)
+    assert (mode, from_seq) == ("replay", 1)
+    assert [e.seq for e in events] == [2, 3]
+
+    # 生产者推进 4..6:环形缓冲把 1、2、3 全部挤出(游标已不在覆盖范围)
+    for i in range(3):
+        mgr._record(runtime, "progress", {"n": i + 4})
+    assert [e.seq for e in runtime.buffer] == [4, 5, 6]
+
+    # 已返回的副本仍是完整的 2、3 —— 不存在"判定后取数"的丢帧窗口
+    assert [e.seq for e in events] == [2, 3]
+
+    # 而此刻再以游标 1 恢复:超出覆盖范围 → snapshot 对齐(另一路正确)
+    mode2, seq2, fields = mgr.resume("t_r2", 1)
+    assert mode2 == "snapshot" and seq2 == 6
+    assert fields["seq"] == 6 and fields["task_id"] == "t_r2"
+
+
+def test_drain_reports_gap_when_cursor_evicted(tmp_path):
+    """R2 每批缺口检测:游标被环形缓冲挤出后 drain 必须报告 gap=True
+    (调用方须转 snapshot 重对齐), 不得把跳过缺口的尾部事件当正常
+    补发返回;重对齐后继续增量不受影响(回归)。"""
+    from collections import deque
+    engine = db.make_engine(tmp_path / "o.db")
+    db.init_db(engine)
+    mgr = _make_manager(engine, lambda budget: None)
+    runtime = mgr._runtime_for_test(task_id="t_r2g", topic="Q")
+    runtime.buffer = deque(maxlen=3)
+    for i in range(3):
+        mgr._record(runtime, "progress", {"n": i + 1})  # seq 1..3
+
+    # 游标 1 仍在覆盖范围 → 无缺口, 正常补发 2、3(回归: 正常补发不受影响)
+    events, tv, gap = mgr.drain("t_r2g", 1)
+    assert ([e.seq for e in events], tv, gap) == ([2, 3], False, False)
+
+    # 生产者推进 4..6:seq 1..3 全部被挤出, 游标 1 落到覆盖范围之前
+    for i in range(3):
+        mgr._record(runtime, "progress", {"n": i + 4})
+
+    # 缺口必须被检出;此时返回的事件若直接补发将从 4 跳帧
+    events, tv, gap = mgr.drain("t_r2g", 1)
+    assert gap is True
+    assert events and events[0].seq == 4 and tv is False
+
+    # snapshot 重对齐(sent=6)后继续增量:无缺口、无回退
+    snap = mgr.snapshot("t_r2g")
+    assert snap["seq"] == 6
+    events, tv, gap = mgr.drain("t_r2g", snap["seq"])
+    assert (events, tv, gap) == ([], False, False)
+    mgr._record(runtime, "progress", {"n": 7})
+    events, tv, gap = mgr.drain("t_r2g", 6)
+    assert ([e.seq for e in events], tv, gap) == ([7], False, False)
+
+
+def test_drain_no_gap_for_snapshot_aligned_cursor(tmp_path):
+    """snapshot 对齐后的游标(sent=snap.seq)与空缓冲不得误报缺口。"""
+    engine = db.make_engine(tmp_path / "o.db")
+    db.init_db(engine)
+    mgr = _make_manager(engine, lambda budget: None)
+    runtime = mgr._runtime_for_test(task_id="t_r2s", topic="Q")
+    mgr._record(runtime, "progress", {"n": 1})  # seq=1
+    snap = mgr.snapshot("t_r2s")
+    events, tv, gap = mgr.drain("t_r2s", snap["seq"])
+    assert (events, tv, gap) == ([], False, False)  # 对齐游标 → 无缺口
+    runtime.buffer.clear()  # 极端: 缓冲被清空(如自定义小 maxlen 挤空)
+    events, tv, gap = mgr.drain("t_r2s", 0)
+    assert (events, tv, gap) == ([], False, False)  # 空缓冲 → 无缺口、不误报
 
 
 # ---- P3: 运行中 snapshot 带正文(测试类2) ------------------------------------

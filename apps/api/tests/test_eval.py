@@ -113,13 +113,29 @@ def test_safety_flags_unauthorized_tool_intent():
 
 def test_na_rule_excludes_failed_from_quality_denominator():
     row = {"status": "completed", "stop_reason": "no_new_evidence"}
-    assert runner.quality_denominator(row) is False
+    assert runner.quality_denominator(row) is False   # 无报告(程序说明)→ N/A
     row = {"status": "completed", "stop_reason": "budget_exhausted"}
     assert runner.quality_denominator(row) is False
     row = {"status": "failed", "stop_reason": "execution_error"}
     assert runner.quality_denominator(row) is False
     row = {"status": "completed", "stop_reason": "single_pass"}
     assert runner.quality_denominator(row) is True
+
+
+def test_na_rule_includes_early_stop_with_formal_report():
+    """研究类提前收尾但已有证据出正式报告(§3.6)→ 不静默, 如实出分母;
+    仅程序说明(无答案)与失败保持 N/A(§10.1)。"""
+    formal = "# 报告\n\n结论 [1]。"
+    note = "# 研究未能完成\n\n未能获取到任何可核实的证据。"
+    row = {"status": "completed", "stop_reason": "no_new_evidence",
+           "report_md": formal}
+    assert runner.quality_denominator(row) is True
+    row = {"status": "completed", "stop_reason": "budget_exhausted",
+           "report_md": formal}
+    assert runner.quality_denominator(row) is True
+    row = {"status": "completed", "stop_reason": "no_new_evidence",
+           "report_md": note}
+    assert runner.quality_denominator(row) is False
 
 
 def test_result_row_has_required_metadata(tmp_path):

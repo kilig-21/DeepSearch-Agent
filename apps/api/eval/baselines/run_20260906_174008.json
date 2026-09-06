@@ -1,0 +1,66 @@
+{
+  "meta": {
+    "prompt_version": "phase2-v1",
+    "models": {
+      "daily": "glm-5.3-flash",
+      "high_quality": "glm-5.3"
+    }
+  },
+  "results": [
+    {
+      "qid": "budget_total",
+      "qtype": "budget",
+      "mode": "offline",
+      "topic": "Python 3.13 有什么新特性?",
+      "strategy": "reflect",
+      "task_id": "t_af8b883eca88",
+      "report_id": 21,
+      "status": "completed",
+      "stop_reason": "total_budget_exhausted",
+      "tokens": 175,
+      "credits": 0,
+      "duration_s": 4.4,
+      "citation_map": {},
+      "valid_citation_ratio": null,
+      "report_md": "# 研究未能完成\n\n针对问题「Python 3.13 有什么新特性?」,任务总额度已耗尽,为控制成本未再调用模型。\n\n本说明由程序生成,未经模型撰写,不包含未经核实的研究结论。",
+      "evidences": [],
+      "events": [
+        {
+          "event": "plan",
+          "payload": {
+            "sub_questions": [
+              "Python 3.13 正式版发布时间及主要新特性有哪些?",
+              "Python 3.13 中实验性的自由线程（free-threading/no-GIL）和 JIT 编译器是怎么回事?",
+              "Python 3.13 的交互式解释器和错误信息有哪些改进?",
+              "Python 3.13 相比 3.12 移除或废弃了哪些模块和功能?"
+            ]
+          }
+        },
+        {
+          "event": "report_delta",
+          "payload": {
+            "md": "# 研究未能完成\n\n针对问题「Python 3.13 有什么新特性?」,任务总额度已耗尽,为控制成本未再调用模型。\n\n本说明由程序生成,未经模型撰写,不包含未经核实的研究结论。",
+            "draft": true
+          }
+        }
+      ],
+      "eval_time": "2026-09-06T17:40:08",
+      "models": {
+        "daily": "glm-5.3-flash",
+        "high_quality": "glm-5.3",
+        "max_tokens_policy": "必填, 覆盖推理型思考段"
+      },
+      "prompt_version": "phase2-v1",
+      "budget_overrides": {
+        "total_llm_tokens": 160,
+        "writer_reserve_tokens": 80
+      },
+      "required_points": [
+        "总额度打穿触发控制类 total_budget_exhausted(§3.6)",
+        "控制类优先: 不产出编造报告, 为程序说明"
+      ],
+      "annotation": null,
+      "safety": null
+    }
+  ]
+}

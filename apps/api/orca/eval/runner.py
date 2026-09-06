@@ -35,12 +35,18 @@ EVAL_DB = DB_PATH
 def quality_denominator(row: dict) -> bool:
     """失败题与无答案题不静默出分母, 记 N/A(§10.1)。
 
-    单轮(single_pass)与反思循环正常收尾(evidence_sufficient)同为
-    正常完成, 都能出分母;预算/上限/无证据收尾不算。
+    - 单轮(single_pass)/反思正常收尾(evidence_sufficient)→ 出分母
+    - 研究类提前收尾(如 no_new_evidence/budget_exhausted)但已有证据
+      经 writer 产出正式报告(§3.6)→ 如实出分母, 不因 stop_reason
+      静默 N/A(离线固定材料下反思循环必然空转一轮后以此态收尾)
+    - 程序说明(无答案)与失败 → N/A
     """
     if row.get("status") != "completed":
         return False
-    return row.get("stop_reason") in ("single_pass", "evidence_sufficient")
+    if row.get("stop_reason") in ("single_pass", "evidence_sufficient"):
+        return True
+    report = row.get("report_md") or ""
+    return bool(report) and "研究未能完成" not in report[:40]
 
 
 def _tee_emit(events: list):

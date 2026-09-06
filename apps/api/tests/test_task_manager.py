@@ -341,6 +341,67 @@ def test_snapshot_after_cancel_hides_draft(tmp_path):
     assert snap["report_md"] == ""
 
 
+# ---- R1: SSE 关闭判断锁内化(drain) -------------------------------------------
+
+def test_drain_never_sees_flag_without_terminal_event(tmp_path):
+    """R1 竞争(受控暂停注入写端临界区):写端在 _record_terminal 置标志
+    之后、事件入缓冲之前挂起(即评审指认的 309→316 窗口), 并发 drain
+    必须等待锁——读端永远观察不到"标志可见但终态事件未取到"的中间态。
+    同时自检:此窗口内锁外裸读 runtime 字段确实会误判可关闭(证明
+    测试窗口真实存在, 而非"先完成发布再读"的假竞争)。"""
+    engine = db.make_engine(tmp_path / "o.db")
+    db.init_db(engine)
+    mgr = _make_manager(engine, lambda budget: None)
+    runtime = mgr._runtime_for_test(task_id="t_r1", topic="Q")
+    mgr._record(runtime, "progress", {"n": 1})  # seq=1, 读者游标从此追
+
+    # 受控暂停:_record_terminal 已置 terminal_recorded=True、尚未 seq+=1
+    gate, release = threading.Event(), threading.Event()
+    orig_record_locked = mgr._record_locked
+
+    def slow_record_locked(rt, event, payload):
+        gate.set()
+        release.wait(timeout=5)  # 仍持锁——模拟 309→316 中间态窗口
+        orig_record_locked(rt, event, payload)
+
+    mgr._record_locked = slow_record_locked
+    writer = threading.Thread(
+        target=lambda: mgr._record_terminal(runtime, "cancelled",
+                                            {"stop_reason": "user_cancelled"}),
+        daemon=True)
+    writer.start()
+    assert gate.wait(5), "写端未进入终态临界区"
+
+    # 自检:窗口内裸读确实可见"标志=True、seq 仍旧值"——旧代码会误关
+    assert runtime.terminal_recorded is True and runtime.seq == 1
+
+    # 并发读者此刻调 drain:必须阻塞等锁, 不得返回中间态
+    reader_done = threading.Event()
+    reader_result: dict = {}
+
+    def reader():
+        reader_result["events"], reader_result["tv"] = mgr.drain("t_r1", 1)
+        reader_done.set()
+
+    threading.Thread(target=reader, daemon=True).start()
+    time.sleep(0.05)
+    assert not reader_done.is_set(), "写端持锁窗口内读者不得观察到中间态"
+
+    release.set()
+    writer.join(5)
+    assert reader_done.wait(5)
+    events, tv = reader_result["events"], reader_result["tv"]
+    # 锁内一致读:要么终态事件在本批可取(tv=False),要么已追上且事件必空
+    if tv:
+        assert events == []            # tv=True ⇒ 无未取事件(不会漏发终态)
+    else:
+        assert any(e.event == "cancelled" for e in events)
+
+    # 追平后 drain:终态已入缓冲, tv=True 且事件空——安全关闭
+    events2, tv2 = mgr.drain("t_r1", 2)
+    assert events2 == [] and tv2 is True
+
+
 # ---- P3: 运行中 snapshot 带正文(测试类2) ------------------------------------
 
 def test_snapshot_running_includes_draft_consistent_with_seq(tmp_path):

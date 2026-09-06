@@ -145,6 +145,22 @@ class TaskManager:
         with self._lock:  # 与写入端同一临界区: 读到的 seq/缓冲一致(P4)
             return [e for e in runtime.buffer if e.seq > last_seq]
 
+    def drain(self, task_id: str, sent: int) -> tuple[list[EventRecord], bool]:
+        """SSE 循环取数(第五轮评审 R1):事件副本、终态标志、seq 在**同一
+        锁临界区**内读取, 返回 (sent 之后的事件, terminal_visible)。
+
+        terminal_visible 仅当"终态标志已置且 sent 已追上当前 seq"——
+        此时缓冲中不可能再有未取的终态事件, SSE 端可安全关闭。
+        SSE 端不得再锁外裸读 runtime 字段判断关闭(裸读可见
+        "标志=True、seq 仍旧值"的中间态, 会漏发终态帧)。"""
+        runtime = self._runtimes.get(task_id)
+        if runtime is None:
+            return ([], True)  # runtime 已消失: 不会有更多事件
+        with self._lock:
+            events = [e for e in runtime.buffer if e.seq > sent]
+            terminal_visible = runtime.terminal_recorded and sent >= runtime.seq
+            return (events, terminal_visible)
+
     def resume_plan(self, task_id: str,
                     last_id: int | None) -> tuple[str, int]:
         """SSE 恢复决策(§3.4 两路恢复; 第四轮评审 P4, 同一临界区原子判定):

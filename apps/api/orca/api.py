@@ -200,11 +200,13 @@ async def _event_stream(manager: TaskManager, engine, task_id: str,
             sent = from_seq
 
         while True:
-            for record in manager.events_after(task_id, sent):
+            # R1: 事件副本与终态可见性同一临界区取得, 不再裸读 runtime 字段
+            events, terminal_visible = manager.drain(task_id, sent)
+            for record in events:
                 yield _sse_frame(record.seq, record.event, record.payload)
                 sent = record.seq
-            if runtime.terminal_recorded and sent >= runtime.seq:
-                return  # 终态帧已发出, 关闭流
+            if terminal_visible:
+                return  # 终态帧已发出且 sent 追上 seq, 关闭流
             try:
                 await asyncio.wait_for(queue.get(), timeout=heartbeat_interval)
             except asyncio.TimeoutError:

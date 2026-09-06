@@ -14,6 +14,8 @@ Next.js 15(App Router)+ Tailwind CSS v4。逻辑正确优先,不追求美观。
   服务端从环形缓冲补发
 - 刷新/视图丢失:重开页面按 `sessionStorage.orca.task_id` 重新订阅(不带任何
   seq 参数),服务端先发完整 snapshot 整体替换;时间线历史明细不回放,显示概要
+- 补发中若游标被挤出环形缓冲(缺口),服务端转为完整 snapshot 重对齐:
+  重对齐点**可能不含缺口内被挤出的中间进度**,以 snapshot 的整体状态为准
 - 终态(done/task_failed/cancelled)或显示终态的 snapshot → 主动 `close()`
 
 Markdown 一律过 `rehype-sanitize`(禁 `img`,即禁远程图片);引用 `[n]` 渲染为

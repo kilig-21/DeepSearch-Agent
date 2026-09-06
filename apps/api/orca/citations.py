@@ -41,6 +41,11 @@ def check_report(
     id_by_n = {str(i + 1): e.evidence_id
                for i, e in enumerate(evidences) if e.evidence_id}
     issues: list[CitationIssue] = []
+    if not report_md.strip():
+        # R3: 空正文判 invalid —— 空报告不得以 valid 落库(事故口径)
+        issues.append(CitationIssue(n="", kind="empty"))
+        return CheckResult(report_md=report_md, evidences=evidences,
+                           citation_map={}, issues=issues)
     cited: dict[str, str] = {}
     for m in _CITE_RE.finditer(report_md):
         n = m.group(1)

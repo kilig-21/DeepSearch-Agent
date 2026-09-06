@@ -640,3 +640,19 @@ def test_writer_stream_settles_known_usage_on_llm_error():
         w({"topic": "Q", "evidence": [_ev()], "stop_reason": None})
 
     assert b.usage_snapshot()["llm_tokens"] == 8200  # 已知成本入账, 不丢
+
+
+def test_writer_non_stream_empty_content_raises_llm_error():
+    """R3: 非流式空 content 与 c76a8b8 流式口径一致 → LLMError
+    (交由 TaskManager 转 task_failed, 不允许空报告 completed 落库);
+    该次调用的成本照常入账。"""
+    b = make_budget()
+    tools, _events, calls = make_tools(
+        [""],                                   # 非流式返回空正文
+        budget=b)
+    w = graph.make_writer(tools)
+    with pytest.raises(LLMError):
+        w({"topic": "Q", "evidence": [_ev()], "stop_reason": None})
+
+    assert b.usage_snapshot()["llm_tokens"] == 150   # 成本已入账
+    assert len(calls["llm"]) == 1                    # 无额外(修订)调用

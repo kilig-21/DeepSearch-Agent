@@ -37,6 +37,15 @@ def test_check_report_flags_zero_and_ignores_non_numeric():
     assert any(i.n == "12" for i in r.issues)
 
 
+def test_check_report_empty_body_not_valid():
+    """R3: 空正文不得判 valid —— 空报告落库 completed 是事故口径
+    (与 c76a8b8 流式空内容显式失败同源), 校验器层面显式标记 empty。"""
+    for body in ("", "   \n  "):
+        r = check_report(body, [ev(1)])
+        assert not r.valid
+        assert r.issues[0].kind == "empty"
+
+
 def test_uncited_evidence_not_in_map():
     r = check_report("只有一条引用 [2]", [ev(1), ev(2)])
     assert r.citation_map == {"2": "ev_002"}

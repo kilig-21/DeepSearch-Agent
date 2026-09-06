@@ -22,6 +22,7 @@ from langgraph.graph import END, START, StateGraph
 
 from .budget import Budget, MIN_USABLE_OUTPUT, PROMPT_MARGIN
 from .citations import check_report, degrade_citations, revise_report
+from .llm import LLMError
 from .evidence import CandidateEvidence, locate_quote, source_type_for_domain
 from .extract import ExtractedPage, ExtractError
 from .merger import merge_candidates
@@ -524,6 +525,11 @@ def make_writer(tools: GraphTools):
                                     tier="high_quality")
             tools.budget.settle_llm(result.usage.get("total_tokens", 0),
                                     for_writer=True)
+            if not result.content.strip():
+                # R3: 非流式空正文与流式空内容同口径显式失败(c76a8b8),
+                # 交由 TaskManager 转 task_failed, 不允许空报告落库;
+                # 该次调用的成本已在上方入账
+                raise LLMError("非流式响应空内容: 正文为空")
             content = result.content
             streamed = False
 

@@ -4,8 +4,11 @@
 - 离线题注入固定材料(search/fetch 不联网, LLM 为真实调用), 可复现
 - 结果行含 §10.1 要求的保存字段: 模型 ID / 提示词版本 / 参数 / 时间 / 轨迹
 - 标注(annotation)是跑后人工/复核环节, runner 置 None 占位
+- 对比实验(§10.4): --compare 时在线题按单轮/反思循环两策略配对执行,
+  同资源上限(同 token 上限/同来源集合), 题序奇偶交替先后防时间漂移
 
-入口: python -m orca.eval  → 跑全部 10 题, 结果写 eval/baselines/run_<ts>.json
+入口: python -m orca.eval [--compare] [--only qid,...]
+  → 结果写 eval/baselines/run_<ts>.json + table_<ts>.md(结果表)
 """
 from __future__ import annotations
 
@@ -22,7 +25,7 @@ from .materials import MATERIALS
 from .questions import QUESTIONS, Question, get
 from . import safety
 
-PROMPT_VERSION = "phase1a-v1"  # graph.py 内各节点提示词版本(改动需递增)
+PROMPT_VERSION = "phase2-v1"  # graph.py 提示词版本(Phase 2 增 reflector)(改动需递增)
 BASELINES_DIR = Path(__file__).resolve().parents[2] / "eval" / "baselines"
 # 评测任务落日常库(§5): 复核者直接查 data/orca.db 追溯 task/sources/
 # evidences(quote/fetched_at);评测库分离曾致复核时查无此任务
@@ -30,10 +33,14 @@ EVAL_DB = DB_PATH
 
 
 def quality_denominator(row: dict) -> bool:
-    """失败题与无答案题不静默出分母, 记 N/A(§10.1)。"""
+    """失败题与无答案题不静默出分母, 记 N/A(§10.1)。
+
+    单轮(single_pass)与反思循环正常收尾(evidence_sufficient)同为
+    正常完成, 都能出分母;预算/上限/无证据收尾不算。
+    """
     if row.get("status") != "completed":
         return False
-    return row.get("stop_reason") == "single_pass"
+    return row.get("stop_reason") in ("single_pass", "evidence_sufficient")
 
 
 def _tee_emit(events: list):
@@ -66,7 +73,11 @@ def make_offline_builder(q: Question, *, llm_chat=None):
 
         async def fetch_async(url: str, *, allowed_domains=None, proxy=None):
             key = dict(q.materials).get(url)
-            if q.qtype == "fetch_fail" or key is None:
+            # 抓取失败注入: fetch_fail 题无哨兵 → 全部失败;材料 "FAIL"
+            # 哨兵按页失败(fetch_partial);未声明 URL 同样失败
+            all_fail = (q.qtype == "fetch_fail" and not any(
+                k == "FAIL" for _u, k in q.materials))
+            if key == "FAIL" or key is None or all_fail:
                 raise ExtractError("评测注入: 模拟抓取失败")
             return ExtractedPage(url=url, final_url=url,
                                  text=MATERIALS[key])
@@ -125,8 +136,13 @@ def _budget_builder_for(q: Question):
     return lambda: Budget(**kwargs)
 
 
-def run_question(q: Question, *, db_path, builder, collector: dict) -> int:
+def run_question(q: Question, *, db_path, builder, collector: dict,
+                 strategy: str = "reflect") -> int:
     """跑一题(复用 CLI 全链路: 建任务→图→同事务落库), 组装结果行。
+
+    strategy: "reflect"(反思循环, 生产默认)| "single"(单轮对比, §10.4)。
+    builder 返回的 tools 上改写 reflect 开关(不改动 builder 本身);
+    events 仍从原 builder 属性取。
 
     任务结果经 cmd_research 的 out 回传(task_id/state), 不用
     list_tasks()[-1]——并发写入同一 DB 时会拿错行(实测踩坑)。
@@ -135,9 +151,16 @@ def run_question(q: Question, *, db_path, builder, collector: dict) -> int:
     """
     import time as _time
 
+    reflect = strategy == "reflect"
+
+    def wrapped_builder(budget):
+        tools = builder(budget)
+        tools.reflect = reflect
+        return tools
+
     t0 = _time.monotonic()
     out: dict = {}
-    rc = cli.cmd_research(q.topic, db_path=db_path, tools_builder=builder,
+    rc = cli.cmd_research(q.topic, db_path=db_path, tools_builder=wrapped_builder,
                           budget_builder=_budget_builder_for(q), out=out)
     duration_s = round(_time.monotonic() - t0, 1)
     events = list(getattr(builder, "events", []))
@@ -164,6 +187,7 @@ def run_question(q: Question, *, db_path, builder, collector: dict) -> int:
     } for e in state.get("evidence", [])]
     row = {
         "qid": q.qid, "qtype": q.qtype, "mode": q.mode, "topic": q.topic,
+        "strategy": strategy,
         "task_id": task_id, "report_id": out.get("report_id"),
         "status": task.get("status"), "stop_reason": task.get("stop_reason"),
         "tokens": usage.get("llm_tokens"),
@@ -188,7 +212,80 @@ def run_question(q: Question, *, db_path, builder, collector: dict) -> int:
     return rc
 
 
-def main(argv=None) -> int:
+def plan_compare(selected: list[Question], *, compare: bool = False
+                 ) -> list[tuple[Question, str]]:
+    """生成执行计划 [(题, 策略)](§10.4 对比口径)。
+
+    - compare=False: 每题一遍 reflect(生产默认模式)
+    - compare=True:  在线题单轮/反思循环各跑一遍(同资源上限配对),
+      按题序奇偶交替两策略先后(防"后跑的策略沾环境变化的光",
+      时间漂移);离线题固定 reflect 只跑一遍(承担回归, 不参与对比)
+    """
+    plan: list[tuple[Question, str]] = []
+    for i, q in enumerate(selected):
+        if q.mode == "online" and compare:
+            first, second = (("single", "reflect") if i % 2 == 0
+                             else ("reflect", "single"))
+            plan.append((q, first))
+            plan.append((q, second))
+        else:
+            plan.append((q, "reflect"))
+    return plan
+
+
+def run_eval(selected: list[Question], *, db_path, builder_for,
+             compare: bool = False) -> list[dict]:
+    """按计划跑题, 返回结果行(builder_for 由 main 注入真实组件, 测试可换桩)。"""
+    rows: list[dict] = []
+    for q, strategy in plan_compare(selected, compare=compare):
+        print(f"\n===== [{q.qid}/{strategy}] {q.topic}")
+        collector: dict = {}
+        run_question(q, db_path=db_path, builder=builder_for(q, strategy),
+                     collector=collector, strategy=strategy)
+        row = collector["row"]
+        extra = (f" safety={row['safety']}" if row["safety"] else "")
+        print(f"----- {q.qid}/{strategy}: {row['status']}/"
+              f"{row['stop_reason']} tokens={row['tokens']} "
+              f"引用有效率={row['valid_citation_ratio']}{extra}")
+        rows.append(row)
+    return rows
+
+
+def build_results_table(rows: list[dict]) -> str:
+    """结果表(§10.2 口径): 自动指标直出;标注类指标留位待补。
+
+    - 自动: 状态/stop_reason/tokens/credits/引用有效率/安全自动判定
+    - 标注类(待 AI 初标+人工复核): 答案覆盖率、断言引用支持率
+    - 失败率分母=全部任务(§10.4)
+    """
+    total = len(rows)
+    failed = sum(1 for r in rows if r["status"] != "completed")
+    lines = [
+        "# Orca 评测结果表(§10.2 口径)",
+        "",
+        f"- 总任务数: {total}",
+        f"- 失败率: {failed / total * 100:.1f}%(分母=全部任务, §10.4)",
+        "- 标注类指标(答案覆盖率/断言引用支持率/安全三条件人工复核):"
+        " 待 AI 初标与人工复核后补, 本表不含(不静默出分)",
+        "",
+        "| qid | mode | strategy | status | stop_reason | tokens | credits "
+        "| 引用有效率 | 安全 |",
+        "|---|---|---|---|---|---|---|---|---|",
+    ]
+    for r in rows:
+        safety_txt = ("—" if r["safety"] is None
+                      else ("pass" if r["safety"].get("pass") else "FAIL"))
+        ratio = ("—" if r["valid_citation_ratio"] is None
+                 else f"{r['valid_citation_ratio']:.2f}")
+        lines.append(
+            f"| {r['qid']} | {r['mode']} | {r['strategy']} | "
+            f"{r['status']} | {r['stop_reason']} | {r['tokens']} | "
+            f"{r['credits']} | {ratio} | {safety_txt} |")
+    return "\n".join(lines) + "\n"
+
+
+def main(argv=None, *, db_path=None, baselines_dir: Path | None = None,
+         builder_for=None) -> int:
     import argparse
     import sys
 
@@ -196,10 +293,12 @@ def main(argv=None) -> int:
         if hasattr(stream, "reconfigure"):
             stream.reconfigure(encoding="utf-8", errors="replace")
 
-    parser = argparse.ArgumentParser(prog="orca.eval",
-                                     description="跑 10 题评测集")
+    parser = argparse.ArgumentParser(
+        prog="orca.eval", description="跑评测集(27 题, §10.1 口径)")
     parser.add_argument("--only", default=None,
                         help="逗号分隔的 qid 列表(默认全部)")
+    parser.add_argument("--compare", action="store_true",
+                        help="在线题按单轮/反思循环两策略配对对比(§10.4)")
     args = parser.parse_args(argv)
 
     selected = QUESTIONS
@@ -207,30 +306,30 @@ def main(argv=None) -> int:
         ids = [s.strip() for s in args.only.split(",") if s.strip()]
         selected = [get(qid) for qid in ids]
 
-    EVAL_DB.parent.mkdir(parents=True, exist_ok=True)
-    BASELINES_DIR.mkdir(parents=True, exist_ok=True)
-    results = []
-    for q in selected:
-        print(f"\n===== [{q.qid}] {q.topic}")
-        builder = (make_online_builder() if q.mode == "online"
-                   else make_offline_builder(q))
-        collector: dict = {}
-        run_question(q, db_path=EVAL_DB, builder=builder, collector=collector)
-        row = collector["row"]
-        extra = (f" safety={row['safety']}" if row["safety"] else "")
-        print(f"----- {q.qid}: {row['status']}/{row['stop_reason']} "
-              f"tokens={row['tokens']} 引用有效率={row['valid_citation_ratio']}"
-              f"{extra}")
-        results.append(row)
+    def default_builder_for(q: Question, strategy: str):
+        return (make_online_builder() if q.mode == "online"
+                else make_offline_builder(q))
+
+    db = db_path or EVAL_DB
+    out_dir = baselines_dir or BASELINES_DIR
+    out_dir.mkdir(parents=True, exist_ok=True)
+    Path(db).parent.mkdir(parents=True, exist_ok=True)
+
+    results = run_eval(selected, db_path=db,
+                       builder_for=builder_for or default_builder_for,
+                       compare=args.compare)
 
     ts = _dt.datetime.now().strftime("%Y%m%d_%H%M%S")
-    out = BASELINES_DIR / f"run_{ts}.json"
+    out = out_dir / f"run_{ts}.json"
     out.write_text(json.dumps(
         {"meta": {"prompt_version": PROMPT_VERSION,
                   "models": {"daily": LLM_DAILY_MODEL,
                              "high_quality": LLM_HIGH_QUALITY_MODEL}},
          "results": results}, ensure_ascii=False, indent=2), encoding="utf-8")
-    print(f"\n基线已保存: {out}")
+    table = out_dir / f"table_{ts}.md"
+    table.write_text(build_results_table(results), encoding="utf-8")
+    print(f"\n基线已保存: {out}\n结果表已保存: {table}")
+    print(build_results_table(results))
     return 0
 
 

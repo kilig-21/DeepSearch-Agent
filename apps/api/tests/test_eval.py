@@ -325,3 +325,41 @@ def test_main_writes_baseline_and_table(tmp_path):
     assert rc == 0
     assert list((tmp_path / "base").glob("run_*.json"))
     assert list((tmp_path / "base").glob("table_*.md"))
+
+
+def test_main_meta_records_resolved_budget_and_guard_snapshot(tmp_path):
+    """R4a: run 文件 meta 自证实验配置 —— 解析后的默认预算快照
+    (total/reserve/credits/pages/time_s, 从 config 读实际值)、writer
+    max_tokens 版本、R1 预算闸门参数、补跑(--only)标记。"""
+    import json
+
+    from orca import config, graph
+
+    rc = runner.main(["--only", "fetch_fail"],
+                     db_path=tmp_path / "eval.db",
+                     baselines_dir=tmp_path / "base",
+                     builder_for=lambda q, s: _offline_builder_for(q))
+    assert rc == 0
+    run_file = next((tmp_path / "base").glob("run_*.json"))
+    meta = json.loads(run_file.read_text(encoding="utf-8"))["meta"]
+
+    b = meta["budget_defaults"]
+    assert b["total_llm_tokens"] == config.BUDGET_TOTAL_LLM_TOKENS
+    assert b["writer_reserve_tokens"] == config.BUDGET_WRITER_RESERVE_TOKENS
+    assert b["max_tavily_credits"] == config.BUDGET_MAX_TAVILY_CREDITS
+    assert b["max_pages"] == config.BUDGET_MAX_PAGES
+    assert b["time_budget_s"] == config.BUDGET_TIME_S
+    assert meta["writer_max_tokens"] == graph._WRITER_MAX_TOKENS
+    assert meta["budget_guard"] == {"min_usable_output": 1024,
+                                    "prompt_margin": 512}
+    assert meta["only_qids"] == ["fetch_fail"]   # 非全量 → 补跑标记可追溯
+
+    # 全量跑(无 --only)→ only_qids 为 None, 与补跑产物可区分
+    rc = runner.main([],
+                     db_path=tmp_path / "eval.db",
+                     baselines_dir=tmp_path / "base",
+                     builder_for=lambda q, s: _offline_builder_for(q))
+    assert rc == 0
+    metas = [json.loads(p.read_text(encoding="utf-8"))["meta"]
+             for p in (tmp_path / "base").glob("run_*.json")]
+    assert any(m["only_qids"] is None for m in metas)

@@ -17,8 +17,16 @@ import json
 import re
 from pathlib import Path
 
-from .. import cli, db
-from ..config import DB_PATH
+from .. import cli, db, graph
+from ..budget import MIN_USABLE_OUTPUT, PROMPT_MARGIN
+from ..config import (
+    BUDGET_MAX_PAGES,
+    BUDGET_MAX_TAVILY_CREDITS,
+    BUDGET_TIME_S,
+    BUDGET_TOTAL_LLM_TOKENS,
+    BUDGET_WRITER_RESERVE_TOKENS,
+    DB_PATH,
+)
 from ..extract import ExtractError, ExtractedPage
 from ..llm import LLM_DAILY_MODEL, LLM_HIGH_QUALITY_MODEL
 from .materials import MATERIALS
@@ -132,9 +140,6 @@ def _budget_builder_for(q: Question):
     if not q.budget_overrides:
         return cli._make_budget  # 默认全预算
     from ..budget import Budget
-    from ..config import (
-        BUDGET_MAX_PAGES, BUDGET_MAX_TAVILY_CREDITS, BUDGET_TIME_S,
-    )
 
     kwargs = dict(
         total_llm_tokens=50_000, writer_reserve_tokens=8_000,
@@ -330,10 +335,23 @@ def main(argv=None, *, db_path=None, baselines_dir: Path | None = None,
 
     ts = _dt.datetime.now().strftime("%Y%m%d_%H%M%S")
     out = out_dir / f"run_{ts}.json"
+    # R4a: meta 自证实验配置 —— 预算/闸门参数为解析后的实际值,
+    # only_qids 非空即补跑产物(与全量 run 可区分, 消除跨版本配对混淆)
     out.write_text(json.dumps(
         {"meta": {"prompt_version": PROMPT_VERSION,
                   "models": {"daily": LLM_DAILY_MODEL,
-                             "high_quality": LLM_HIGH_QUALITY_MODEL}},
+                             "high_quality": LLM_HIGH_QUALITY_MODEL},
+                  "budget_defaults": {
+                      "total_llm_tokens": BUDGET_TOTAL_LLM_TOKENS,
+                      "writer_reserve_tokens": BUDGET_WRITER_RESERVE_TOKENS,
+                      "max_tavily_credits": BUDGET_MAX_TAVILY_CREDITS,
+                      "max_pages": BUDGET_MAX_PAGES,
+                      "time_budget_s": BUDGET_TIME_S},
+                  "writer_max_tokens": graph._WRITER_MAX_TOKENS,
+                  "budget_guard": {"min_usable_output": MIN_USABLE_OUTPUT,
+                                   "prompt_margin": PROMPT_MARGIN},
+                  "only_qids": ([s.strip() for s in args.only.split(",")
+                                 if s.strip()] if args.only else None)},
          "results": results}, ensure_ascii=False, indent=2), encoding="utf-8")
     table = out_dir / f"table_{ts}.md"
     table.write_text(build_results_table(results), encoding="utf-8")

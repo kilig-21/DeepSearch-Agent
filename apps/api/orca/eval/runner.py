@@ -39,14 +39,17 @@ def quality_denominator(row: dict) -> bool:
     - 研究类提前收尾(如 no_new_evidence/budget_exhausted)但已有证据
       经 writer 产出正式报告(§3.6)→ 如实出分母, 不因 stop_reason
       静默 N/A(离线固定材料下反思循环必然空转一轮后以此态收尾)
-    - 程序说明(无答案)与失败 → N/A
+    - 程序说明(无答案, 或控制类中断未成文)与失败 → N/A
     """
     if row.get("status") != "completed":
         return False
     if row.get("stop_reason") in ("single_pass", "evidence_sufficient"):
         return True
+    if not row.get("evidences"):
+        return False   # 无证据 → 报告必为程序说明或未成文
     report = row.get("report_md") or ""
-    return bool(report) and "研究未能完成" not in report[:40]
+    # 控制类中断(timeout 等)即便有证据也只产出程序说明, 不入分母
+    return "研究未能完成" not in report[:40]
 
 
 def _tee_emit(events: list):

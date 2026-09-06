@@ -124,17 +124,21 @@ def test_na_rule_excludes_failed_from_quality_denominator():
 
 def test_na_rule_includes_early_stop_with_formal_report():
     """研究类提前收尾但已有证据出正式报告(§3.6)→ 不静默, 如实出分母;
-    仅程序说明(无答案)与失败保持 N/A(§10.1)。"""
+    仅程序说明(无答案/控制类中断)与失败保持 N/A(§10.1)。"""
     formal = "# 报告\n\n结论 [1]。"
     note = "# 研究未能完成\n\n未能获取到任何可核实的证据。"
     row = {"status": "completed", "stop_reason": "no_new_evidence",
-           "report_md": formal}
+           "report_md": formal, "evidences": [{"evidence_id": "ev_001"}]}
     assert runner.quality_denominator(row) is True
     row = {"status": "completed", "stop_reason": "budget_exhausted",
-           "report_md": formal}
+           "report_md": formal, "evidences": [{"evidence_id": "ev_001"}]}
     assert runner.quality_denominator(row) is True
     row = {"status": "completed", "stop_reason": "no_new_evidence",
-           "report_md": note}
+           "report_md": note, "evidences": []}
+    assert runner.quality_denominator(row) is False
+    # 控制类中断: 即便抓到过证据, 报告仍是程序说明 → N/A
+    row = {"status": "completed", "stop_reason": "timeout",
+           "report_md": note, "evidences": [{"evidence_id": "ev_001"}]}
     assert runner.quality_denominator(row) is False
 
 

@@ -1,8 +1,8 @@
 # Orca Research 项目计划书
 
-> **版本**: v1.3(2026-09-05)
-> **修订记录**: v1.0 初稿 → v1.1 第一轮评审 → v1.2 第二轮评审 → v1.2.1 阅读层改本地 Defuddle → **v1.3 落实第三轮评审:终止原因双路径、预算两级规则、SSE 恢复语义、Phase 1A 依赖修正、quote 严格化**(见 §11)
-> **状态**: 计划书冻结(三轮评审通过)。**Phase 0、Phase 1A 已完成(2026-09-05;实测记录见 `apps/api/docs/probe_results.md` 与 `apps/api/eval/baselines/`)。当前阶段:Phase 1B**(新执行会话从 §4 Phase 1B 开始,遵守 §0 全部约束)
+> **版本**: v1.5(2026-09-06)
+> **修订记录**: v1.0 初稿 → v1.1 第一轮评审 → v1.2 第二轮评审 → v1.2.1 阅读层改本地 Defuddle → v1.3 落实第三轮评审(终止原因双路径、预算两级规则、SSE 恢复语义、Phase 1A 依赖修正、quote 严格化)→ **v1.4 第四轮验收评审打回后修复 P1-P7/F1-F4** → **v1.5 第五轮复验仍打回,第二轮修复 R1-R4 后三验通过,Phase 1B 正式闭环**(均见 §11)
+> **状态**: 计划书冻结(三轮评审通过)。**Phase 0、1A、1B 已完成**(1B 于 2026-09-06 经外部评审两轮打回 + 修复 + 三验通过闭环,全过程见 §11)。**当前阶段:Phase 2**(开工前硬闸门:22 条 support 断言全量人工复核,§10.1;新执行会话从 §4 Phase 2 开始,遵守 §0 全部约束)
 > **作者**: 用户 + Claude(实时 GitHub 数据调研 + 两轮交叉评审)
 
 ---
@@ -392,6 +392,7 @@ data: {"task_id":"t_xxx","ts":"...","round":1,"query":"...","results":[...]}
 - 任务生命周期:POST 创建 → GET 订阅 SSE → 状态快照 → 取消;snapshot 事件;心跳;**两路恢复语义(§3.4 v1.3)**:Last-Event-ID 补发 / 刷新先完整 snapshot
 - 前端:输入框 + 时间线(**事件归属映射**:plan/search/reading/note/reflection/warning → 时间线;report_delta → 报告区;done/task_failed/cancelled → 任务状态;snapshot → 恢复视图)+ 报告流式渲染(引用可点击)+ Markdown 清理 + 禁远程图片
 - **验收(四个具体场景,v1.3)**:① **writer 执行中取消** → 终态 cancelled,不产生半截正式报告;② **额度耗尽** → 研究额度耗尽仍出报告 / 总额度耗尽不再调模型;③ **刷新后恢复完整正文**(snapshot 含前半段,不丢字);④ **进程重启后显示 interrupted** 且历史报告可取;另验:断线自动重连补发、报告与 tasks 状态同事务
+- **结果(2026-09-06,已完成)**:✅ 四场景全部 PASS,经外部评审**两轮打回 → 修复 → 三验通过**正式闭环。并发正确性收口:终态发布/恢复判定/快照字段同一锁临界区;完成路径同事务条件提交防后到覆盖;`chat_stream` 传输层显式失败(error 帧/提前 EOF 不落半截报告);引用修订受总预算约束(耗尽走确定性降级)。**213 tests**(后端 pytest)+ 前端 vitest 9 + `tsc` 通过。评审全过程见 §11 第四/五/六轮。**遗留硬闸门**:22 条 support 断言全量人工复核 → Phase 2 开工前完成(§10.1)
 
 ### Phase 2 — 反思循环 + 首次发布(约 2~3 周)
 
@@ -694,6 +695,34 @@ Phase 1B 交付物(后端 API/SSE/前端 + 测试)经评审确认 11 项发现,�
 **假覆盖修正**:场景①事件流断言改为缓冲内游标走补发路径(原 `?after=0` 路径已删);`test_running_task_snapshot_has_draft_progress` 改为 writer 已产出片段时连接并断言 snapshot 正文非空(原实现等价于"未断言草稿正文")。
 
 **自验结果**:后端 pytest 202 passed(含新增 P1-P6 与测试类 1-5);前端 vitest 9 passed(F1-F4 与测试类 6-7)+ `tsc --noEmit` 通过。
+
+### 第五轮复验评审(2026-09-06,外部强模型评审;**结论:仍打回**)
+
+对 v1.4 修复轮复验(真实 uvicorn + HTTP/SSE + SQLite + 离线替身,0 真实 API 调用):11 项中 7 CLOSED(P3/P6/P7/F1-F4)、**3 NOT_CLOSED(P1/P4/P5)、1 REGRESSION(P2)**;四个主场景全部 PASS,但完整契约下复现四个阻断:
+
+| # | 机制 | 复现证据 |
+|---|---|---|
+| R1(P5 未闭合) | 写端 `_record_terminal` 原子,但 SSE 端**锁外裸读** `terminal_recorded`/`seq`——worker 在"置标志→事件入缓冲"之间被 GIL 切出时,读者可见中间态 → `frames=[]` 提前关流漏发终态帧 | 受控调度:terminal_recorded=true、seq=1 时 SSE 已关闭,终态随后才成为 seq=2 |
+| R2(P4 未闭合) | `resume_plan` 判定与 `events_after` 取数分属两个临界区,间隙生产者把游标挤出环形缓冲 → 补发跳帧,无检测无兜底 | 容量 3 缓冲,游标 2 实收 6/7/8,丢 3-5 且无 snapshot |
+| R3(P1 未闭合) | writer 引用修订在 settle 之后调用,无任何预算检查 → 总额度耗尽仍调模型 | 上限 600 实耗 750(研究 450 + writer 150 + 修订 150) |
+| R4(P2 回归) | `chat_stream` 不识别上游 `error` 帧、正常 EOF(无 `[DONE]`)不校验、usage 缺失静默按 0 → 半截/空报告以 completed 落库 | error 帧落库空报告;提前 EOF 落库半截报告,均 completed |
+
+测试质量批评:`test_terminal_event_visible_before_flag_when_subscribed` 为"先完成发布再读"的假并发测试;`chat_stream` 传输解析零测试(writer 测试直接替换迭代器绕过解析层)。
+
+### 第二轮修复(v1.5,2026-09-06)与第六轮三验(**通过,Phase 1B 正式闭环**)
+
+| # | 修复 | 落实位置 | 三验证据 |
+|---|---|---|---|
+| R1 | 新增 `drain(task_id, sent)`:事件副本+终态标志+seq+缺口判定**同一锁临界区**返回;api.py 循环消费 drain,删除全部 runtime 裸读 | `task_manager.py` drain、`api.py` SSE 循环(e3d32ed) | 受控暂停精确注入"标志已置/事件未入"窗口:窗口内 0 帧 0 EOF,释放后 done 帧收全才关 ✅ |
+| R2 | `resume()` 判定与首批取数同临界区;`drain` 每批缺口检测(缓冲首条 seq > sent+1 → gap)→ SSE 转**完整 snapshot 重对齐**后继续,不跳帧补发;快照字段抽取共用避免嵌套锁 | `task_manager.py` resume/drain、`api.py` gap 分支(9ed3ea2) | maxlen=3 注入真挤出 → 下一帧即 snapshot 重对齐,后续 id 递增无跳帧 ✅ |
+| R3 | 修订前检查 `total_exhausted() or out_of_time()` → 耗尽走 `degrade_citations` 确定性降级 + warning 事件,不调模型;五类 LLM 调用点预算前置全部盘点确认 | `graph.py` writer 修订分支(cb00c22) | 600/600 恰打穿 → 修订零模型调用、无效引用降级"(未经正文核实)"、token_cost=600≤600、stop_reason 保持 ✅ |
+| R4 | `error` 帧 → `LLMError`;无 `[DONE]` → `LLMError`;usage 缺失 → warning+按 0 记账(不静默);writer `finally: gen.close()` 关底层 HTTP 流 | `llm.py` chat_stream、`graph.py` writer 流式(1da05c8) | 集成五路径:error 帧/提前 EOF → task_failed 且 reports 0 行;正常流分账正确;usage 缺失告警记账;取消触发上下文关闭 ✅ |
+
+**回归**:四场景(流式中取消/两级预算耗尽/中途刷新拼接/真进程强杀重启)+ Last-Event-ID 补发/零/过期/超前/409/心跳 + 事务回滚/条件提交全部 PASS。
+
+**测试**:213 passed(202 + 11);新增测试经假覆盖标准逐条审查——`test_drain_never_sees_flag_without_terminal_event` 先自检裸读窗口真实存在再断言修复;`test_sse_realigns_...` 用 ASGI send 消息桥实现真增量流(绕开 TestClient/ASGITransport 整体缓冲的"事后回放"陷阱)。
+
+**三验遗留(不阻断,纳入 Phase 2 开工收尾)**:① 端到端重对齐测试 docstring 注明"R2 并发防线依赖此测试";② 前端文档补"重对齐点可能不含缺口内中间进度"语义;③ 手工 curl 类测试注意 httpx `trust_env`(系统代理会截胡 127.0.0.1;项目代码已 `trust_env=False`,不受影响)。
 
 ---
 

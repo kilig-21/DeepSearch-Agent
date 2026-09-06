@@ -12,6 +12,17 @@ from __future__ import annotations
 
 import time
 
+# ---- 调用前约束(修复轮 R1)----------------------------------------------
+# prompt 侧 token 不可精确预知: 按 prompt_estimate 保守扣除, 外加固定边际
+# (覆盖 tokenization 估计误差与少量系统开销; 中文 1 字 ≈ 1 token 持平,
+# 英文约 4 字符 1 token, 调用方按 len(text) 估算时边际足够)
+PROMPT_MARGIN = 512
+# 最小可用输出阈值: glm-5.3 为推理型, 思考段与正文共享 max_tokens(probe
+# T9), 在线实测思考动辄数千 token——输出配额低于 1024 时连最小思考+最短
+# 正文都放不下, 调用大概率空响应/残缺(c76a8b8 会显式失败), 不值得发起。
+# 各调用点统一判 allowed < MIN_USABLE_OUTPUT → 走程序说明/确定性降级。
+MIN_USABLE_OUTPUT = 1_024
+
 
 class ReserveError(RuntimeError):
     """writer 预留重复建立。"""
@@ -93,6 +104,19 @@ class Budget:
         """任务总额度耗尽 → 不再调用任何模型(§3.6)。"""
         return self.used_llm_tokens >= self.total_llm_tokens
 
+    def max_output_tokens(self, requested: int, prompt_estimate: int) -> int:
+        """调用前约束(修复轮 R1): 按剩余总额度 clamp 本次请求的 max_tokens。
+
+        settle 是事后记账, 只约束"当前是否已耗尽";本方法约束"即将发生的
+        调用":输出配额 = 剩余总额度 − prompt 保守估算。prompt 侧不可精确
+        预知, 调用方按 len(prompt 文本) 估算(中文 1 字 ≈ 1 token 持平,
+        英文高估), 加 PROMPT_MARGIN 边际。
+        返回值 < MIN_USABLE_OUTPUT(可为负)表示额度不足以完成一次最小
+        有效调用, 调用方不得发起调用, 走程序说明/确定性降级。
+        """
+        remaining = self.total_llm_tokens - self.used_llm_tokens
+        return min(requested, remaining - prompt_estimate - PROMPT_MARGIN)
+
     # ---- 其他账 ----------------------------------------------------------
     def charge_credits(self, n: int) -> bool:
         if self.used_credits + n > self.max_tavily_credits:
@@ -126,4 +150,7 @@ class Budget:
             "llm_writer_tokens": self.used_llm_writer,
             "tavily_credits": self.used_credits,
             "jina_tokens": self.used_jina_tokens,
+            # 落库前终检(R1b): 调用前 clamp 依赖 prompt 估算, 真实 prompt
+            # tokens 仍可能超出估算 → 实耗越限以事实标记, 禁止静默
+            "over_budget": self.used_llm_tokens > self.total_llm_tokens,
         }

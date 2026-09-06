@@ -20,7 +20,7 @@ from urllib.parse import urlparse
 
 from langgraph.graph import END, START, StateGraph
 
-from .budget import Budget
+from .budget import Budget, MIN_USABLE_OUTPUT, PROMPT_MARGIN
 from .citations import check_report, degrade_citations, revise_report
 from .evidence import CandidateEvidence, locate_quote, source_type_for_domain
 from .extract import ExtractedPage, ExtractError
@@ -38,6 +38,16 @@ _READER_MAX_TOKENS = 4096
 # (2026-09-06 conflict_typing 题 3/3)8192 会被思考吃穿(length 截断、
 # content 0 片段)→ 提高一倍给思考留余量(probe 结论: 调用必须给足)
 _WRITER_MAX_TOKENS = 16384
+_REVISE_MAX_TOKENS = 8192   # 引用修订(citations.revise_report 原默认值)
+
+
+def _below_min_output(tools: GraphTools, requested: int,
+                      prompt_text: str) -> int:
+    """调用前约束(R1): 返回 clamp 后的输出配额;额度不足以完成一次
+    最小有效调用(< MIN_USABLE_OUTPUT, 可为负)时调用方不得发起调用。
+    prompt 估算按 len(text)(中文 1 字 ≈ 1 token 持平, 英文高估),
+    边际由 Budget.max_output_tokens 内的 PROMPT_MARGIN 统一加。"""
+    return tools.budget.max_output_tokens(requested, len(prompt_text))
 
 
 class ResearchState(TypedDict):
@@ -116,14 +126,23 @@ def make_planner(tools: GraphTools):
         stop = _control_stop(state, tools.budget)
         if stop:
             return {"stop_reason": stop}
+        prompt = (
+            f"你是研究规划器。把用户问题拆解为 2~4 个可搜索的中文子问题,"
+            f"并给出 1 个首轮搜索查询。只输出 JSON:"
+            f'{{"sub_questions": ["..."], "query": "..."}}\n\n'
+            f"用户问题: {state['topic']}")
+        allowed = _below_min_output(tools, _READER_MAX_TOKENS, prompt)
+        if allowed < MIN_USABLE_OUTPUT:
+            # R1 调用前约束: 总额度连一次最小有效调用的估算成本都盖不住
+            tools.emit("warning", {
+                "stage": "planner",
+                "detail": f"剩余额度不足(可用输出 {allowed} < 最小阈值 "
+                          f"{MIN_USABLE_OUTPUT}), 不调用模型"})
+            return {"stop_reason": "total_budget_exhausted"}
         try:
             result = tools.llm_chat(
-                [{"role": "user", "content":
-                  f"你是研究规划器。把用户问题拆解为 2~4 个可搜索的中文子问题,"
-                  f"并给出 1 个首轮搜索查询。只输出 JSON:"
-                  f'{{"sub_questions": ["..."], "query": "..."}}\n\n'
-                  f"用户问题: {state['topic']}"}],
-                max_tokens=_READER_MAX_TOKENS, tier="daily",
+                [{"role": "user", "content": prompt}],
+                max_tokens=allowed, tier="daily",
                 reasoning_effort="low")  # 机械拆解任务, 压制思考省配额
         except Exception as e:  # noqa: BLE001
             tools.emit("warning", {"stage": "planner",
@@ -232,10 +251,19 @@ def make_reader(tools: GraphTools):
                 "只能整段摘录)。只输出 JSON: "
                 '{"points": [{"point": "...", "quote": "..."}]}\n\n正文:\n'
                 f"{page.text[:_MAX_PROMPT_CHARS]}")
+            allowed = _below_min_output(tools, _READER_MAX_TOKENS, prompt)
+            if allowed < MIN_USABLE_OUTPUT:
+                # R1 调用前约束: 剩余额度不足以摘要(剩余不会回升)→ 停止
+                # 摘要, 已有候选证据保留, 后续交 reflector 确定性判定
+                tools.emit("warning", {
+                    "stage": "reader",
+                    "detail": f"剩余额度不足(可用输出 {allowed} < 最小阈值 "
+                              f"{MIN_USABLE_OUTPUT}), 停止本页起的摘要"})
+                break
             try:
                 result_llm = tools.llm_chat(
                     [{"role": "user", "content": prompt}],
-                    max_tokens=_READER_MAX_TOKENS, tier="daily",
+                    max_tokens=allowed, tier="daily",
                     reasoning_effort="low")  # 机械摘录任务, 压制思考省配额
             except Exception as e:  # noqa: BLE001
                 tools.emit("warning", {"stage": "reader",
@@ -339,10 +367,18 @@ def make_reflector(tools: GraphTools):
             f"已执行查询: {used}\n"
             f"证据池({len(state.get('evidence', []))} 条要点):\n"
             + ("\n".join(ev_lines) or "(空)"))
+        allowed = _below_min_output(tools, _READER_MAX_TOKENS, prompt)
+        if allowed < MIN_USABLE_OUTPUT:
+            # R1 调用前约束: 剩余额度不足以反思 → 退化单轮收尾, 不调模型
+            tools.emit("warning", {
+                "stage": "reflector",
+                "detail": f"剩余额度不足(可用输出 {allowed} < 最小阈值 "
+                          f"{MIN_USABLE_OUTPUT}), 不调用反思模型"})
+            return {"next_queries": []}
         try:
             result = tools.llm_chat(
                 [{"role": "user", "content": prompt}],
-                max_tokens=_READER_MAX_TOKENS, tier="daily",
+                max_tokens=allowed, tier="daily",
                 reasoning_effort="low")  # 机械评估任务, 压制思考省配额
         except Exception as e:  # noqa: BLE001
             tools.emit("warning", {"stage": "reflector",
@@ -441,13 +477,27 @@ def make_writer(tools: GraphTools):
             "2. 每条实质性断言都要有对应引用;无证据支持的猜测不得写入。\n"
             "3. 结构:# 标题、结论段、详情段、局限性段(说明证据覆盖的不足)。\n\n"
             "证据池:\n" + "\n".join(lines))
+        allowed = _below_min_output(tools, _WRITER_MAX_TOKENS, prompt)
+        if allowed < MIN_USABLE_OUTPUT:
+            # R1 调用前约束: 剩余额度不足以完成一次最小有效写作 → 不调用,
+            # 程序说明(防御纵深:全链路下多被研究侧/两级规则提前拦截)
+            note = _program_note(
+                state, "剩余额度不足以完成一次最小模型调用,为控制成本"
+                       "未再调用模型。")
+            tools.emit("warning", {
+                "stage": "writer",
+                "detail": f"剩余额度不足(可用输出 {allowed} < 最小阈值 "
+                          f"{MIN_USABLE_OUTPUT}), 不调用模型写报告"})
+            tools.emit("report_delta", {"md": note, "draft": True})
+            return {"report_md": note, "citation_map": {},
+                    "stop_reason": "total_budget_exhausted"}
         messages = [{"role": "user", "content": prompt}]
         streamed = False
         if tools.llm_chat_stream is not None:
             # 流式(§3.4 草稿):逐片段 emit, 片段间经过取消检查点——
             # 取消在流式过程中即可生效(第四轮评审 P2)
             gen, usage_box = tools.llm_chat_stream(
-                messages, max_tokens=_WRITER_MAX_TOKENS, tier="high_quality")
+                messages, max_tokens=allowed, tier="high_quality")
             pieces: list[str] = []
             try:
                 for piece in gen:
@@ -462,7 +512,7 @@ def make_writer(tools: GraphTools):
             content = "".join(pieces)
             streamed = True
         else:
-            result = tools.llm_chat(messages, max_tokens=_WRITER_MAX_TOKENS,
+            result = tools.llm_chat(messages, max_tokens=allowed,
                                     tier="high_quality")
             tools.budget.settle_llm(result.usage.get("total_tokens", 0),
                                     for_writer=True)
@@ -475,18 +525,24 @@ def make_writer(tools: GraphTools):
             if not streamed:  # 非流式: 一次性草稿帧(现状行为)
                 tools.emit("report_delta", {"md": final, "draft": True})
         else:
-            if tools.budget.total_exhausted() or tools.budget.out_of_time():
-                # 修订要再调一次模型(第五轮评审 R3):总额度/时限已耗尽时
-                # 不得绕过总预算调模型——直接走确定性降级(移除无效引用+
-                # 句尾标注), 不调模型;stop_reason 保持研究类真实值不变
+            # 修订要再调一次模型(第五轮评审 R3;R1 调用前约束):总额度/
+            # 时限已耗尽,或剩余额度不足以完成一次最小有效修订时,不得调
+            # 模型——直接走确定性降级(移除无效引用+句尾标注), 不调模型;
+            # stop_reason 保持研究类真实值不变。revise prompt ≈ 报告全文
+            # + 固定说明与证据列表(保守 +800 字)
+            rev_allowed = tools.budget.max_output_tokens(
+                _REVISE_MAX_TOKENS, len(content) + 800)
+            if (tools.budget.total_exhausted() or tools.budget.out_of_time()
+                    or rev_allowed < MIN_USABLE_OUTPUT):
                 tools.emit("warning", {
                     "stage": "writer",
-                    "detail": "总额度/时限已耗尽, 引用修订不调模型, "
-                              "按程序化降级处理引用"})
+                    "detail": "总额度/时限已耗尽或剩余额度不足, 引用修订"
+                              "不调模型, 按程序化降级处理引用"})
                 final = degrade_citations(content, evidence)
             else:
                 final, usage_extra = revise_report(content, evidence,
-                                                   tools.llm_chat)
+                                                   tools.llm_chat,
+                                                   max_tokens=rev_allowed)
                 if usage_extra:
                     tools.budget.settle_llm(
                         usage_extra.get("total_tokens", 0), for_writer=True)

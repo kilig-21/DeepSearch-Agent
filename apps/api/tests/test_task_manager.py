@@ -122,6 +122,41 @@ def test_run_completes_persists_report_and_emits_done(tmp_path):
     assert events[-1].payload["stop_reason"] == "single_pass"
 
 
+def test_done_marks_over_budget_and_warns_when_actual_exceeds_limit(tmp_path):
+    """R1b 落库前终检: 实耗超总额上限 → done.usage.over_budget 如实标记
+    + warning 事件(禁止静默);settle 语义不变(usage 是事实总是记账)。
+    构造: builder 预烧超 total=100 的账, 模拟"prompt 实际 tokens 超出
+    调用前估算"的越限事实(_control_stop 即拦, 任务 completed 程序说明)。"""
+    engine = db.make_engine(tmp_path / "o.db")
+    db.init_db(engine)
+
+    def builder(budget):
+        budget.settle_llm(200, for_writer=False)   # 200 > total 100
+        tools, _e, _c = make_tools(happy_llm_sides(),
+                                   search_results=default_search_results())
+        tools.budget = budget
+        return tools
+
+    mgr = TaskManager(engine, tools_builder=builder,
+                      budget_builder=lambda: make_budget(total_llm=100,
+                                                         reserve=50))
+    task_id = mgr.create("Q")
+    assert mgr.wait(task_id, timeout=10)
+
+    task = db.get_task(engine, task_id)
+    assert task["status"] == "completed"
+    usage_json = task["usage_json"]
+    assert usage_json["llm_tokens"] == 200          # 事实入账(settle 语义不变)
+    assert usage_json["over_budget"] is True        # DB 路: 如实标记
+
+    events = mgr.events_after(task_id, 0)
+    done = events[-1]
+    assert done.event == "done"
+    assert done.payload["usage"]["over_budget"] is True   # 事件路: 同一标记
+    assert any(e.event == "warning" and "超" in e.payload.get("detail", "")
+               for e in events)                     # 警告不静默
+
+
 def test_done_not_emitted_when_persist_fails(tmp_path):
     """persist(同事务提交)失败 → 任务 failed, 且不得出现 done 事件(§3.4)。"""
     engine = db.make_engine(tmp_path / "o.db")

@@ -7,6 +7,7 @@ import json
 
 from orca import graph
 from orca.budget import Budget
+from orca.evidence import CandidateEvidence
 from orca.extract import ExtractedPage
 from orca.llm import LLMResult
 from orca.search import SearchResult
@@ -43,16 +44,18 @@ def make_budget(total_llm=200_000, reserve=8_000, credits=16, pages=12,
 def make_tools(llm_sides, search_results=None, fetch_failures=None,
                budget=None, search_error=None, llm_stream_chunks=None,
                *, reflect=False, reflect_sides=None, search_sides=None,
-               pages=None, max_rounds=3):
+               pages=None, max_rounds=3, llm_usage=None):
     """llm_sides: 按调用序返回的 content 列表;fetch_failures: {url: Exception};
     llm_stream_chunks: writer 流式片段列表(提供时 writer 走流式)。
     reflect: 反思循环开关。**本文件与 1B 既有测试默认 False(线性链路回归,
     与 Phase 1 行为一致)**;循环行为测试(test_reflector.py)必须显式传
     reflect=True —— 忘传时 reflect_sides 不会被消费, 断言显式失败不假绿。
     reflect_sides: reflector 专用输出队列(按 prompt 含"研究反思器"分派)。
-    search_sides: 按搜索调用序返回的结果列表(多轮测试用);pages: URL→正文映射。"""
+    search_sides: 按搜索调用序返回的结果列表(多轮测试用);pages: URL→正文映射;
+    llm_usage: 自定义 fake usage(默认每次 total 150)。"""
     calls = {"llm": [], "fetch": [], "search": []}
-    usage = {"prompt_tokens": 100, "completion_tokens": 50, "total_tokens": 150}
+    usage = llm_usage or {"prompt_tokens": 100, "completion_tokens": 50,
+                          "total_tokens": 150}
     reflect_sides = list(reflect_sides or [])
 
     def llm_chat(messages, *, max_tokens, tier, reasoning_effort=None):
@@ -191,7 +194,9 @@ def test_fetch_failure_emits_warning_and_continues():
 def test_research_budget_fuse_stops_research_but_writes_program_note():
     """研究额度耗尽 → budget_exhausted;证据为空时 writer 不调 LLM,
     生成程序说明(§3.6 两级规则)。"""
-    b = make_budget(total_llm=200, reserve=100)  # 研究额度仅 100 < fake usage 150
+    # R1 调用前约束后 total 须盖过一次最小调用(planner prompt 估算+1024);
+    # 研究额度 150 = total 2000 − reserve 1850, 仍 < fake usage 150 后续
+    b = make_budget(total_llm=2000, reserve=1850)
     tools, events, calls = make_tools([PLANNER_JSON], budget=b)
     state = asyncio.run(graph.run_research(tools, "Q", task_id="t_test4"))
 
@@ -203,12 +208,14 @@ def test_research_budget_fuse_stops_research_but_writes_program_note():
 
 
 def test_total_budget_exhausted_skips_writer_llm():
-    b = make_budget(total_llm=150, reserve=0)   # planner 一次即打穿总额度
+    """R1 后更强: 总额度 150 连 planner 一次最小调用的估算成本都盖不住,
+    调用前即拦截(planner 不发起调用), 控制类终态直达。"""
+    b = make_budget(total_llm=150, reserve=0)   # planner 前即拦截
     tools, _e, calls = make_tools([PLANNER_JSON], budget=b)
     state = asyncio.run(graph.run_research(tools, "Q", task_id="t_test5"))
 
     assert state["stop_reason"] == "total_budget_exhausted"
-    assert len(calls["llm"]) == 1               # writer 未调用模型
+    assert len(calls["llm"]) == 0               # 任何模型调用都未发生
     assert "未能" in state["report_md"]
 
 
@@ -338,8 +345,9 @@ def _make_tools_multi(llm_sides, *, budget=None, clock=None):
 def test_reader_rechecks_research_budget_between_pages():
     """多页任务中途研究额度耗尽 → 剩余页不再抓取/调模型(实际调用次数
     不超预算),已有候选证据保留并走 writer 预留出报告(P1)。"""
-    # research 额度 = 650 - 200 = 450 = planner 150 + 2 页摘要 300
-    b = make_budget(total_llm=650, reserve=200)
+    # R1 后 total 须盖过 planner 一次最小调用;研究额度 450(= planner 150
+    # + 2 页摘要 300)不变: total 2650 − reserve 2200 = 450
+    b = make_budget(total_llm=2650, reserve=2200)
     tools, events, calls = _make_tools_multi(
         [PLANNER_JSON,
          reader_json(["自由线程模式,可禁用全局解释器锁"]),
@@ -449,11 +457,13 @@ def test_reader_rechecks_time_before_summarize():
 # ---- R3:引用修订不得绕过总预算(第五轮评审) -----------------------------------
 
 def test_revision_skips_llm_when_total_budget_exhausted():
-    """总额度恰在 writer 主调用后耗尽 → 引用修订不调模型, 走
-    degrade_citations 确定性降级 + warning 事件;实耗不越上限,
-    stop_reason 保持研究类真实值(第五轮评审 R3)。
+    """修订也是模型调用(R1 调用前约束): writer 后剩余额度不足以完成
+    一次最小有效修订 → 引用修订不调模型, 走 degrade_citations 确定性
+    降级 + warning 事件;实耗不越上限, stop_reason 保持研究类真实值
+    (第五轮评审 R3;原"总额度恰打穿"路径在 R1 clamp 下不可达——writer
+    合法调用后必剩 prompt 估算+边际, 故以额度不足触发同一降级分支)。
     llm_sides 只提供 4 侧: 修订若意外调模型将 pop 空列表报错。"""
-    b = make_budget(total_llm=600, reserve=0)  # planner150+2页300+writer150=600
+    b = make_budget(total_llm=3300, reserve=0)  # fake usage 400/次
     tools, events, calls = make_tools(
         [PLANNER_JSON,
          reader_json(["自由线程模式,可禁用全局解释器锁",
@@ -461,7 +471,9 @@ def test_revision_skips_llm_when_total_budget_exhausted():
          reader_json(["错误消息更加友好"]),
          "结论 [5] 来自外部。"],                    # writer 主调用输出无效引用
         search_results=default_search_results(),
-        budget=b)
+        budget=b, llm_usage={"prompt_tokens": 250,
+                             "completion_tokens": 150,
+                             "total_tokens": 400})
     state = asyncio.run(graph.run_research(tools, "Q", task_id="t_r3a"))
 
     assert len(calls["llm"]) == 4                   # 修订未调模型(无第 5 侧)
@@ -469,6 +481,129 @@ def test_revision_skips_llm_when_total_budget_exhausted():
     assert "未经正文核实" in state["report_md"]      # degrade_citations 结果
     assert "结论" in state["report_md"]              # 断言未被删除
     warnings = [p for e, p in events if e == "warning"]
-    assert any(p.get("stage") == "writer" for p in warnings)
-    assert b.usage_snapshot()["llm_tokens"] <= 600  # 实耗不越总上限
+    assert any(p.get("stage") == "writer" and "额度" in p.get("detail", "")
+               for p in warnings)
+    assert b.usage_snapshot()["llm_tokens"] <= 3300  # 实耗不越总上限
     assert state["stop_reason"] == "single_pass"    # 研究类真实值保持不变
+
+
+# ---- 修复轮 R1:预算从"事后记账"升级为"调用前约束" ---------------------------
+
+def _ev(n=1, quote="自由线程模式,可禁用全局解释器锁", point="自由线程定义"):
+    return CandidateEvidence(
+        url=f"https://docs.python.org/p{n}", title=f"来源{n}",
+        domain="docs.python.org", source_type="doc", quote=quote,
+        point=point, content_hash="h", evidence_id=f"ev_{n:03d}")
+
+
+def test_planner_not_called_when_total_below_min_usable():
+    """R1c 复现 budget_total(上限 160):总额度连一次最小有效调用的
+    prompt 估算都盖不住 → planner 不发起调用, 直接控制类终态, 实耗 0。"""
+    b = make_budget(total_llm=160, reserve=80)
+    tools, events, calls = make_tools([PLANNER_JSON], budget=b)
+    state = asyncio.run(graph.run_research(tools, "Q", task_id="t_r1a"))
+
+    assert calls["llm"] == []                       # 调用前拦截
+    assert b.used_llm_tokens == 0
+    assert state["stop_reason"] == "total_budget_exhausted"
+    assert "总额度" in state["report_md"]            # 程序说明
+    assert any(e == "warning" and "剩余额度" in p.get("detail", "")
+               for e, p in events)
+
+
+def test_writer_max_tokens_clamped_to_remaining():
+    """R1c 复现场景:研究已耗 38000,研究侧 3 次调用(fake 每次 1500)
+    后 42500;writer 请求 16384 被 clamp 到剩余可容纳值, 全程 ≤ 50000。"""
+    b = make_budget(total_llm=50_000, reserve=8_000)
+    b.settle_llm(38_000, for_writer=False)          # 模拟研究前期已耗
+    tools, events, calls = make_tools(
+        [PLANNER_JSON,
+         reader_json(["自由线程模式,可禁用全局解释器锁",
+                      "交互式解释器支持多行编辑与彩色提示"]),
+         reader_json(["错误消息更加友好"])],
+        search_results=default_search_results(),
+        llm_stream_chunks=["# 报告\n", "正文 [1]。"],
+        budget=b, llm_usage={"prompt_tokens": 1000,
+                             "completion_tokens": 500,
+                             "total_tokens": 1500})
+    state = asyncio.run(graph.run_research(tools, "Q", task_id="t_r1b"))
+
+    wc = [c for c in calls["llm"] if c.get("stream")]
+    assert wc, "writer 应走流式"
+    wp = wc[0]["messages"][-1]["content"]
+    # 42500 = 预充 38000 + 研究侧 3 次调用(planner+reader×2)×1500
+    assert wc[0]["max_tokens"] == 50_000 - 42_500 - len(wp) - 512
+    assert b.used_llm_tokens <= 50_000              # 总账不越限
+    assert state["report_md"].startswith("# 报告")   # 正常出报告
+
+
+def test_writer_node_skips_call_when_remaining_below_min():
+    """节点级:剩余额度不足以完成一次最小有效调用 → writer 不调模型,
+    程序说明, 控制类终态(防御纵深:全链路下该情形多被研究侧提前拦截)。"""
+    b = make_budget(total_llm=2_000, reserve=1_000)
+    b.settle_llm(1_900, for_writer=False)           # 剩余 100
+    tools, events, calls = make_tools([], budget=b)
+    w = graph.make_writer(tools)
+    out = w({"topic": "Q", "evidence": [_ev()], "stop_reason": None})
+
+    assert calls["llm"] == []
+    assert out["stop_reason"] == "total_budget_exhausted"
+    assert "程序生成" in out["report_md"]
+
+
+def test_reader_skips_summary_when_remaining_below_min():
+    """节点级:页面已抓取但剩余额度不足以摘要 → 不调用, warning 跳页,
+    已有候选证据保留。"""
+    b = make_budget(total_llm=2_600, reserve=200)
+    b.settle_llm(2_200, for_writer=False)           # 剩余 400
+    tools, events, calls = make_tools([PLANNER_JSON], budget=b)
+    reader = graph.make_reader(tools)
+    state = {"topic": "Q", "sub_questions": ["q1"], "planned_query": "q",
+             "search_results": [SearchResult(
+                 url="https://docs.python.org/a", title="A", snippet="s")],
+             "seen_urls": [], "candidate_evidence": [_ev(9)],
+             "round_no": 1, "stop_reason": None}
+    out = reader(state)
+
+    assert calls["llm"] == []                       # 摘要未调用
+    assert calls["fetch"] == ["https://docs.python.org/a"]  # 页面已抓
+    assert any("剩余额度" in p.get("detail", "") for e, p in events
+               if e == "warning")
+    assert out["candidate_evidence"] == [_ev(9)]    # 已有候选保留
+
+
+def test_reflector_degrades_without_call_when_remaining_below_min():
+    """节点级:剩余额度不足以反思 → 不调用模型, 退化单轮收尾(writer
+    兜底 stop_reason), 与反思失败路径同构。"""
+    b = make_budget(total_llm=2_000, reserve=200)
+    b.settle_llm(1_700, for_writer=False)           # 剩余 300(未熔断研究额度)
+    tools, events, calls = make_tools([], budget=b)
+    r = graph.make_reflector(tools)
+    out = r({"topic": "Q", "sub_questions": ["q1"], "round_no": 1,
+             "search_rounds": [{"query": "q"}], "evidence": [_ev()],
+             "last_added_count": 1, "stop_reason": None})
+
+    assert calls["llm"] == []
+    assert out == {"next_queries": []}
+    assert any("剩余额度" in p.get("detail", "") for e, p in events
+               if e == "warning")
+
+
+def test_citation_revision_degrades_when_remaining_below_min():
+    """节点级:writer 调用后剩余额度不足以修订(修订 prompt 含报告全文,
+    越长越贵)→ 程序化降级处理引用, 不再调模型(修订也是模型调用,
+    R1 同口径约束)。"""
+    b = make_budget(total_llm=4_000, reserve=200)
+    b.settle_llm(2_000, for_writer=False)           # writer 剩余可调用
+    long_bad_report = "结论 [5] 来自外部。" + "正文内容。" * 833  # ≈5000 字
+    tools, events, calls = make_tools(
+        [long_bad_report],                          # 越界引用 → 触发修订
+        budget=b)
+    w = graph.make_writer(tools)
+    out = w({"topic": "Q", "evidence": [_ev()], "stop_reason": None})
+
+    assert len(calls["llm"]) == 1                   # 仅 writer 本体, 修订未调
+    assert "[5]" not in out["report_md"]
+    assert "未经正文核实" in out["report_md"]        # 程序化降级标记
+    assert any("额度" in p.get("detail", "") for e, p in events
+               if e == "warning")

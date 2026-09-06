@@ -359,7 +359,9 @@ def test_i4_no_new_evidence_stops_before_second_reflection():
 def test_i5_research_exhausted_at_reflector():
     """第一轮结束时研究额度恰耗尽 → reflector 不调模型,
     budget_exhausted, 已有证据走 writer 预留(§3.6 两级规则)。"""
-    b = make_budget(total_llm=600, reserve=150)   # 研究额度 450 = planner+2页
+    # R1 后 total 须盖过 planner 一次最小调用;研究额度 450(= planner 150
+    # + 2 页 300)不变: total 2650 − reserve 2200 = 450
+    b = make_budget(total_llm=2650, reserve=2200)
     tools, events, calls = make_tools(
         [PLANNER_JSON,
          reader_json(["自由线程模式,可禁用全局解释器锁",

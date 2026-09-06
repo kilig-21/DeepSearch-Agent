@@ -92,6 +92,7 @@ def test_usage_snapshot_for_db():
     assert b.usage_snapshot() == {
         "llm_tokens": 2_757, "llm_research_tokens": 2_757,
         "llm_writer_tokens": 0, "tavily_credits": 1, "jina_tokens": 0,
+        "over_budget": False,
     }
 
 
@@ -117,3 +118,46 @@ def test_split_accounts_do_not_change_budget_checks():
     assert b.research_exhausted() is True
     assert b.settle_llm(2_000, for_writer=True) is True
     assert b.total_exhausted() is True
+
+
+# ---- 调用前约束(修复轮 R1): max_tokens 按剩余总额度 clamp -------------------
+
+def test_max_output_tokens_passes_through_when_rich():
+    """额度充裕 → 按请求值放行, 不改变既有调用形态。"""
+    b = make_b()
+    assert b.max_output_tokens(16_384, prompt_estimate=1_000) == 16_384
+
+
+def test_max_output_tokens_clamps_to_remaining():
+    """修复轮评审复现场景: 研究 41000/50000 时请求 16384 输出会被
+    clamp 到剩余额度可容纳值, 总账不再越限。"""
+    b = make_b(total_llm=50_000, reserve=8_000)
+    b.settle_llm(41_000, for_writer=False)
+    # 剩余 9000, prompt 保守估算 1000 + 边际 512 → 输出上限 7488
+    assert b.max_output_tokens(16_384, prompt_estimate=1_000) == 7_488
+
+
+def test_max_output_tokens_negative_when_prompt_alone_exceeds():
+    """budget_total 场景: 总额度 160 连 prompt 估算都盖不住 → 负值,
+    调用方判 < MIN_USABLE_OUTPUT 后不得发起调用。"""
+    b = make_b(total_llm=160, reserve=80)
+    assert b.max_output_tokens(4_096, prompt_estimate=572) < 0
+
+
+def test_min_usable_output_threshold_exported():
+    """阈值自定并说明: glm-5.3 推理型输出配额低于 1024 时连最小思考+正文
+    都放不下(实测思考动辄数千 token), 调用大概率空响应/残缺 → 不值得发起。
+    作为库级常量导出, 调用方统一判定。"""
+    assert budget.MIN_USABLE_OUTPUT == 1_024
+    assert budget.PROMPT_MARGIN == 512
+
+
+def test_usage_snapshot_includes_over_budget():
+    """落库前终检口径: usage 是已发生的事实总是记账(settle 语义不变),
+    超限事实以 over_budget 如实标记, 禁止静默(修复轮 R1b)。"""
+    b = make_b(total_llm=100, reserve=0)
+    b.settle_llm(150, for_writer=False)
+    snap = b.usage_snapshot()
+    assert snap["over_budget"] is True
+    b2 = make_b()
+    assert b2.usage_snapshot()["over_budget"] is False

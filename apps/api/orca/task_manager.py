@@ -249,6 +249,15 @@ class TaskManager:
             if runtime.cancel_event.is_set():  # persist 前最后检查(§3.4)
                 raise TaskCancelled
             usage = budget.usage_snapshot()
+            if usage.get("over_budget"):
+                # R1b 落库前终检: 调用前 clamp 依赖 prompt 估算, 真实
+                # prompt tokens 仍可能超出估算 → 实耗越限如实警告,
+                # 禁止静默(usage/usage_json 中的 over_budget 标记同步可见)
+                self._record(runtime, "warning", {
+                    "stage": "budget",
+                    "detail": f"预算终检: 实耗 {usage['llm_tokens']} tokens "
+                              f"超总额上限 {budget.total_llm_tokens}, "
+                              f"已在 usage 中如实标记 over_budget"})
             report_id = self._persist_fn(
                 self._engine, task_id, state, budget,
                 allowed_domains=tools.allowed_domains,

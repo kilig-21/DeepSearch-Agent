@@ -93,14 +93,15 @@ def test_scenario_1_cancel_during_writer(tmp_path):
 def test_scenario_2a_research_budget_exhausted_still_reports(tmp_path):
     """研究额度耗尽 → 停止研究走 writer 预留路径, 任务仍 completed 且有报告。
 
-    构造: 研究额度 100 < planner 实测用量(150), 总额度 200 不爆 →
-    searcher 入口 budget_exhausted(研究类);writer 不调模型(无证据 →
-    程序生成说明), 报告落库, 任务 completed。
+    构造: 研究额度 150 = planner 实测用量(R1 后 total 须盖过一次最小
+    调用, 故 total=2000/reserve=1850), 总额度 2000 不爆 → searcher 入口
+    budget_exhausted(研究类);writer 不调模型(无证据 → 程序生成说明),
+    报告落库, 任务 completed。
     """
     calls = {"n": 0}
 
     def budget_builder():
-        return make_budget(total_llm=200, reserve=100)
+        return make_budget(total_llm=2000, reserve=1850)
 
     def builder(budget):
         tools, _e, _c = make_tools(happy_llm_sides(),
@@ -130,7 +131,9 @@ def test_scenario_2a_research_budget_exhausted_still_reports(tmp_path):
 
 
 def test_scenario_2b_total_budget_exhausted_no_more_llm(tmp_path):
-    """总额度耗尽 → 不再调用任何模型, 程序生成说明收尾(total_budget_exhausted)。"""
+    """总额度耗尽 → 不再调用任何模型, 程序生成说明收尾(total_budget_exhausted)。
+    R1 调用前约束后更强: 总额度 150 连 planner 一次最小调用的估算成本都
+    盖不住 → planner 不发起调用, 全程零模型调用。"""
     calls = {"n": 0}
 
     def budget_builder():
@@ -156,8 +159,8 @@ def test_scenario_2b_total_budget_exhausted_no_more_llm(tmp_path):
         snap = client.get(f"/api/research/{task_id}").json()
         assert snap["status"] == "completed"
         assert snap["stop_reason"] == "total_budget_exhausted"
-        # planner 已耗尽总额度 → 后续任何节点不再调用模型
-        assert calls["n"] == 1
+        # R1 调用前约束 → planner 即拦截, 全程零模型调用
+        assert calls["n"] == 0
 
 
 # ---- ③ 刷新后恢复完整正文 ------------------------------------------------------

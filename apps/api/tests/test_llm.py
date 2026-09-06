@@ -3,6 +3,9 @@
 工程约束(Phase 0 探针教训):glm-5.3 为推理型模型, max_tokens=100 时 content
 为空(思考即耗尽)→ max_tokens 必须显式给足, 设为必填参数。
 """
+import json
+
+import httpx
 import pytest
 
 from orca import llm
@@ -156,3 +159,83 @@ def test_reasoning_effort_value_passthrough():
     client.chat([{"role": "user", "content": "hi"}], max_tokens=2048,
                 reasoning_effort="high")
     assert post.calls[0]["json"]["reasoning_effort"] == "high"
+
+
+# ---- R4:chat_stream 传输解析(第五轮评审;离线真 httpx.Response, 走原版解析层) --
+
+def _sse_frame(obj) -> str:
+    return f"data: {json.dumps(obj, ensure_ascii=False)}\n\n"
+
+
+DELTA = {"choices": [{"delta": {"content": "片段"}}]}
+USAGE_FRAME = {"choices": [], "usage": {"prompt_tokens": 10,
+                                        "completion_tokens": 20,
+                                        "total_tokens": 30}}
+
+
+@pytest.fixture
+def patch_httpx_stream(monkeypatch):
+    """把 httpx.stream 指向离线构造的真 httpx.Response(0.28 的
+    httpx.stream 本身是 @contextmanager, fake 保持同构);响应迭代
+    (iter_lines)走原版实现, chat_stream 解析层不做任何替换。"""
+    def _install(sse_text: str):
+        from contextlib import contextmanager
+
+        @contextmanager
+        def fake_stream(method, url, **kw):
+            yield httpx.Response(200, text=sse_text)
+        monkeypatch.setattr(httpx, "stream", fake_stream)
+    return _install
+
+
+def _stream_client():
+    return make_client(make_post([]))  # post 仅满足构造; 流式不经过
+
+
+def test_stream_yields_deltas_and_captures_usage(patch_httpx_stream):
+    """正常流:逐片段产出正文, usage 经 include_usage 帧捕获, [DONE] 收尾。"""
+    sse = (_sse_frame(DELTA)
+           + _sse_frame({"choices": [{"delta": {"content": "二"}}]})
+           + _sse_frame(USAGE_FRAME)
+           + "data: [DONE]\n\n")
+    patch_httpx_stream(sse)
+    gen, usage_box = _stream_client().chat_stream([], max_tokens=1024)
+    assert list(gen) == ["片段", "二"]
+    assert usage_box["total_tokens"] == 30
+
+
+def test_stream_error_frame_raises_llm_error(patch_httpx_stream):
+    """上游 error 帧 → LLMError, 不得当成功静默(评审 R4①);交
+    TaskManager 转 task_failed, 禁止半截报告落库。"""
+    sse = (_sse_frame(DELTA)  # 先产出正文, 模拟半截后出错
+           + _sse_frame({"error": {"message": "rate limited", "code": "429"}})
+           + "data: [DONE]\n\n")
+    patch_httpx_stream(sse)
+    gen, _box = _stream_client().chat_stream([], max_tokens=1024)
+    pieces = []
+    with pytest.raises(llm.LLMError, match="rate limited"):
+        for piece in gen:
+            pieces.append(piece)
+    assert pieces == ["片段"]  # 已产片段保留, 异常中断流
+
+
+def test_stream_early_eof_raises_llm_error(patch_httpx_stream):
+    """正常走完但未收到 [DONE](半截流)→ LLMError(评审 R4②)。"""
+    patch_httpx_stream(_sse_frame(DELTA))  # 无 [DONE]
+    gen, _box = _stream_client().chat_stream([], max_tokens=1024)
+    with pytest.raises(llm.LLMError, match="提前终止"):
+        list(gen)
+
+
+def test_stream_missing_usage_warns_and_records_zero(patch_httpx_stream, caplog):
+    """有 [DONE] 但 usage 缺失 → 显式告警并按 0 记账, 不静默(评审 R4③)。"""
+    import logging
+
+    sse = _sse_frame(DELTA) + "data: [DONE]\n\n"
+    patch_httpx_stream(sse)
+    gen, usage_box = _stream_client().chat_stream([], max_tokens=1024)
+    with caplog.at_level(logging.WARNING, logger="orca.llm"):
+        assert list(gen) == ["片段"]
+    assert usage_box["total_tokens"] == 0
+    assert usage_box["prompt_tokens"] == 0 and usage_box["completion_tokens"] == 0
+    assert "usage" in caplog.text.lower()

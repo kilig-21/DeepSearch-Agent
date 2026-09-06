@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import time
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
@@ -20,6 +21,8 @@ from .config import (
     ZHIPU_API_KEY,
     ZHIPU_CHAT_URL,
 )
+
+logger = logging.getLogger(__name__)
 
 MAX_RETRIES = 2       # 每调用重试上限(§3.6)
 # §3.6 原回填 30s 基于 4 系列(4~6s);glm-5.3 推理型思考段远超此值,
@@ -152,15 +155,22 @@ class LLMClient:
                 if resp.status_code != 200:
                     body = resp.read().decode("utf-8", errors="replace")
                     raise LLMError(f"HTTP {resp.status_code}: {body[:200]}")
+                seen_done = False
                 for line in resp.iter_lines():
                     if not line.startswith("data:"):
                         continue
                     data = line[len("data:"):].strip()
-                    if not data or data == "[DONE]":
-                        if data == "[DONE]":
-                            break
+                    if not data:
                         continue
+                    if data == "[DONE]":
+                        seen_done = True
+                        break
                     obj = json.loads(data)
+                    if obj.get("error"):
+                        # 上游错误帧(第五轮评审 R4):不得当成功静默跳过,
+                        # 显式失败交由 TaskManager 转 task_failed
+                        raise LLMError(
+                            f"流式上游错误: {str(obj['error'])[:200]}")
                     if obj.get("usage"):
                         usage_box.update(obj["usage"])
                     choices = obj.get("choices") or []
@@ -169,5 +179,16 @@ class LLMClient:
                     delta = (choices[0].get("delta") or {}).get("content")
                     if delta:
                         yield delta
+                if not seen_done:
+                    # 正常走完但未收到 [DONE](第五轮评审 R4):半截流当
+                    # 成功会落半截报告, 显式失败
+                    raise LLMError("流式响应提前终止: 未收到 [DONE]")
+            if not usage_box:
+                # usage 缺失显式处理(第五轮评审 R4):此时正文已完整交付,
+                # 报错会浪费已完成计算 → 告警并按 0 记账(低估但可审计),
+                # 不静默
+                logger.warning("流式响应未返回 usage, 按 0 token 记账")
+                usage_box.update({"prompt_tokens": 0, "completion_tokens": 0,
+                                  "total_tokens": 0})
 
         return gen(), usage_box

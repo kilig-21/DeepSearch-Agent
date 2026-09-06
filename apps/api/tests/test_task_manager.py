@@ -255,6 +255,45 @@ def test_cancel_after_terminal_is_rejected(tmp_path):
     assert db.get_task(engine, task_id)["status"] == "completed"
 
 
+def test_writer_stream_closed_on_cancel(tmp_path):
+    """取消发生时(writer 片段 emit 抛 TaskCancelled), writer 的 finally
+    必须显式 gen.close() 关闭流生成器——进而关闭底层 HTTP 流上下文
+    (第五轮评审 R4④)。"""
+    engine = db.make_engine(tmp_path / "o.db")
+    db.init_db(engine)
+    gate, release = threading.Event(), threading.Event()
+    closed = {"flag": False}
+
+    def builder(budget):
+        tools = _writer_stream_tools(gate, release)
+        tools.budget = budget
+        inner = tools.llm_chat_stream
+
+        def tracked_stream(messages, *, max_tokens, tier):
+            gen, box = inner(messages, max_tokens=max_tokens, tier=tier)
+
+            def tracked():
+                try:
+                    yield from gen
+                finally:
+                    closed["flag"] = True  # close 链最终关闭底层流
+            return tracked(), box
+
+        tools.llm_chat_stream = tracked_stream
+        return tools
+
+    mgr = _make_manager(engine, builder)
+    task_id = mgr.create("Q")
+    try:
+        assert gate.wait(5)
+        assert mgr.request_cancel(task_id) is True
+    finally:
+        release.set()
+    assert mgr.wait(task_id, timeout=10)
+    assert db.get_task(engine, task_id)["status"] == "cancelled"
+    assert closed["flag"] is True, "取消后 writer 必须显式关闭流生成器"
+
+
 def test_terminal_event_recorded_only_once(tmp_path):
     """终态唯一, 后到者丢弃(§3.4)。"""
     engine = db.make_engine(tmp_path / "o.db")

@@ -331,9 +331,14 @@ def make_writer(tools: GraphTools):
             gen, usage_box = tools.llm_chat_stream(
                 messages, max_tokens=_WRITER_MAX_TOKENS, tier="high_quality")
             pieces: list[str] = []
-            for piece in gen:
-                pieces.append(piece)
-                tools.emit("report_delta", {"md": piece, "draft": True})
+            try:
+                for piece in gen:
+                    pieces.append(piece)
+                    tools.emit("report_delta", {"md": piece, "draft": True})
+            finally:
+                # 提前退出(取消等)时显式关闭生成器, 关闭底层 HTTP 流
+                # 上下文(第五轮评审 R4)
+                gen.close()
             tools.budget.settle_llm(usage_box.get("total_tokens", 0),
                                     for_writer=True)
             content = "".join(pieces)

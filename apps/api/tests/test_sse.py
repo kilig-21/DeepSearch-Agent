@@ -364,7 +364,10 @@ async def _stream_sse_lines_realtime(app, path, *, headers=None,
 def test_sse_realigns_with_snapshot_when_cursor_evicted_midstream(tmp_path):
     """R2 端到端(真增量流):小缓冲(maxlen=3)下, 客户端以缓冲内游标
     恢复并收完首批补发后, 生产者继续推进把游标挤出环形缓冲 → SSE 流
-    必须转为完整 snapshot 重对齐, 不得把跳过缺口的尾部事件当补发直接发出。"""
+    必须转为完整 snapshot 重对齐, 不得把跳过缺口的尾部事件当补发直接发出。
+
+    注意: R2 并发防线(每批缺口检测 → snapshot 重对齐)依赖此测试,
+    勿删改其结构(缓冲容量/游标注入/桥接 send 的真增量流方式)。"""
     gate, release = threading.Event(), threading.Event()
 
     def builder(budget):

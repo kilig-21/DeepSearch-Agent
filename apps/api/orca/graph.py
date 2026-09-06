@@ -503,6 +503,14 @@ def make_writer(tools: GraphTools):
                 for piece in gen:
                     pieces.append(piece)
                     tools.emit("report_delta", {"md": piece, "draft": True})
+            except Exception:
+                # R2 分账: usage 帧先于正文到达(空流/上游错误), 取消检查点
+                # 也可能在流中抛出——usage_box 已有值即已知成本, 先 settle
+                # 再传播(usage 是事实, 禁止丢账; settle 语义不变)
+                if usage_box:
+                    tools.budget.settle_llm(
+                        usage_box.get("total_tokens", 0), for_writer=True)
+                raise
             finally:
                 # 提前退出(取消等)时显式关闭生成器, 关闭底层 HTTP 流
                 # 上下文(第五轮评审 R4)

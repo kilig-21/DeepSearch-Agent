@@ -7,7 +7,7 @@ import asyncio
 
 import pytest
 
-from orca import cli
+from orca import cli, db
 from tests.test_graph import make_tools, happy_llm_sides, default_search_results
 
 
@@ -182,3 +182,16 @@ def test_cmd_cost_by_task_id(tmp_path, capsys):
 def test_cmd_cost_unknown_task_fails(tmp_path, capsys):
     rc = cli.cmd_cost("no_such_task", db_path=tmp_path / "empty.db")
     assert rc == 1
+
+
+def test_cmd_cost_tolerates_task_without_usage(tmp_path, capsys):
+    """R2: 中断/未及建账的任务 usage_json 为 None → cost 不崩, 按 0 展示;
+    失败任务带 usage 时则如实显示(failed 三路一致的第三路)。"""
+    db_path = tmp_path / "o.db"
+    engine = db.make_engine(db_path)
+    db.init_db(engine)
+    ghost = db.create_task(engine, topic="没跑完就重启")
+    db.mark_stale_interrupted(engine)   # interrupted: 无 usage_json
+
+    assert cli.cmd_cost(ghost, db_path=db_path) == 0
+    assert "LLM tokens: 0" in capsys.readouterr().out

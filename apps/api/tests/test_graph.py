@@ -5,11 +5,13 @@
 import asyncio
 import json
 
+import pytest
+
 from orca import graph
 from orca.budget import Budget
 from orca.evidence import CandidateEvidence
 from orca.extract import ExtractedPage
-from orca.llm import LLMResult
+from orca.llm import LLMError, LLMResult
 from orca.search import SearchResult
 
 ALLOWED = {"docs.python.org", "developer.mozilla.org"}
@@ -44,9 +46,12 @@ def make_budget(total_llm=200_000, reserve=8_000, credits=16, pages=12,
 def make_tools(llm_sides, search_results=None, fetch_failures=None,
                budget=None, search_error=None, llm_stream_chunks=None,
                *, reflect=False, reflect_sides=None, search_sides=None,
-               pages=None, max_rounds=3, llm_usage=None):
+               pages=None, max_rounds=3, llm_usage=None,
+               llm_stream_error=None):
     """llm_sides: 按调用序返回的 content 列表;fetch_failures: {url: Exception};
-    llm_stream_chunks: writer 流式片段列表(提供时 writer 走流式)。
+    llm_stream_chunks: writer 流式片段列表(提供时 writer 走流式);
+    llm_stream_error: 流式 gen 在 usage 帧落账后抛出的异常(复现 R2 空流
+    时序: usage 先于异常到达)。
     reflect: 反思循环开关。**本文件与 1B 既有测试默认 False(线性链路回归,
     与 Phase 1 行为一致)**;循环行为测试(test_reflector.py)必须显式传
     reflect=True —— 忘传时 reflect_sides 不会被消费, 断言显式失败不假绿。
@@ -79,6 +84,8 @@ def make_tools(llm_sides, search_results=None, fetch_failures=None,
         def gen():
             yield from chunks
             usage_box.update(dict(usage))
+            if llm_stream_error is not None:
+                raise llm_stream_error
 
         return gen(), usage_box
 
@@ -104,7 +111,9 @@ def make_tools(llm_sides, search_results=None, fetch_failures=None,
     events = []
     return graph.GraphTools(
         llm_chat=llm_chat,
-        llm_chat_stream=llm_chat_stream if llm_stream_chunks else None,
+        llm_chat_stream=llm_chat_stream
+        if (llm_stream_chunks is not None or llm_stream_error is not None)
+        else None,
         search_fn=search_fn, fetch_async=fetch_async,
         budget=budget or make_budget(), emit=lambda e, p: events.append((e, p)),
         allowed_domains=ALLOWED, reflect=reflect, max_rounds=max_rounds,
@@ -607,3 +616,27 @@ def test_citation_revision_degrades_when_remaining_below_min():
     assert "未经正文核实" in out["report_md"]        # 程序化降级标记
     assert any("额度" in p.get("detail", "") for e, p in events
                if e == "warning")
+
+
+# ---- 修复轮 R2:失败/取消路径分账 ---------------------------------------------
+
+def test_writer_stream_settles_known_usage_on_llm_error():
+    """R2 复现空流丢账:chat_stream 先收 usage 帧再发现 0 正文片段
+    (c76a8b8 显式 LLMError)→ writer 流式迭代抛错时 usage_box 已有
+    已知成本, 须先 settle 再传播(usage 是事实, 禁止丢账)。"""
+    b = make_budget()
+    tools, _events, calls = make_tools(
+        [PLANNER_JSON,
+         reader_json(["自由线程模式,可禁用全局解释器锁",
+                      "交互式解释器支持多行编辑与彩色提示"]),
+         reader_json(["错误消息更加友好"])],
+        llm_stream_chunks=[],                       # 空流: 无正文片段
+        llm_stream_error=LLMError("流式响应空内容: 收到 [DONE] 但无正文片段"),
+        budget=b, llm_usage={"prompt_tokens": 6000,
+                             "completion_tokens": 2200,
+                             "total_tokens": 8200})
+    w = graph.make_writer(tools)
+    with pytest.raises(LLMError):
+        w({"topic": "Q", "evidence": [_ev()], "stop_reason": None})
+
+    assert b.usage_snapshot()["llm_tokens"] == 8200  # 已知成本入账, 不丢

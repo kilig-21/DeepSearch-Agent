@@ -181,21 +181,29 @@ def complete_task_with_report(
         return report.id
 
 
-def fail_task(engine, task_id: str, *, stop_reason: str) -> None:
-    _set_terminal(engine, task_id, status="failed", stop_reason=stop_reason)
+def fail_task(engine, task_id: str, *, stop_reason: str,
+              usage: dict | None = None) -> None:
+    _set_terminal(engine, task_id, status="failed", stop_reason=stop_reason,
+                  usage=usage)
 
 
-def cancel_task(engine, task_id: str, *, stop_reason: str = "user_cancelled") -> None:
-    _set_terminal(engine, task_id, status="cancelled", stop_reason=stop_reason)
+def cancel_task(engine, task_id: str, *, stop_reason: str = "user_cancelled",
+                usage: dict | None = None) -> None:
+    _set_terminal(engine, task_id, status="cancelled", stop_reason=stop_reason,
+                  usage=usage)
 
 
-def _set_terminal(engine, task_id: str, *, status: str, stop_reason: str) -> None:
-    """终态转移:仅 running 可流转, 最终状态一旦提交不得覆盖(§3.4)。"""
+def _set_terminal(engine, task_id: str, *, status: str, stop_reason: str,
+                  usage: dict | None = None) -> None:
+    """终态转移:仅 running 可流转, 最终状态一旦提交不得覆盖(§3.4)。
+    usage(R2 分账)是任务终态前的既成事实, 随终态落库供 orca cost 查询。"""
     with Session(engine) as session, session.begin():
         task = session.get(Task, task_id)
         if task and task.status == "running":
             task.status = status
             task.stop_reason = stop_reason
+            if usage is not None:
+                task.usage_json = json.dumps(usage, ensure_ascii=False)
 
 
 def mark_stale_interrupted(engine) -> int:

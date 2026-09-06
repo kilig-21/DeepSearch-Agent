@@ -276,23 +276,31 @@ class TaskManager:
                 "usage": usage,   # 成本分账(块 2)随终态事件下发
             })
         except TaskCancelled:
-            self._finish_cancelled(runtime)
+            # R2 分账: 取消时已耗成本是事实, 随终态落库(三路一致)
+            usage = budget.usage_snapshot() if budget is not None else None
+            self._finish_cancelled(runtime, usage)
         except Exception as e:  # noqa: BLE001
-            db.fail_task(self._engine, task_id, stop_reason="execution_error")
+            # R2 分账: 失败(含空流 LLMError)时 usage_box 已 settle 进
+            # Budget → 快照随 task_failed 落库与下发, 禁止丢账
+            usage = budget.usage_snapshot() if budget is not None else None
+            db.fail_task(self._engine, task_id, stop_reason="execution_error",
+                         usage=usage)
             self._record_terminal(runtime, "task_failed", {
                 "detail": f"{type(e).__name__}: {e}",
-                "stop_reason": "execution_error"})
+                "stop_reason": "execution_error", "usage": usage})
         finally:
             runtime.finished.set()
             with self._lock:
                 if self._active_task_id == task_id:
                     self._active_task_id = None
 
-    def _finish_cancelled(self, runtime: TaskRuntime) -> None:
+    def _finish_cancelled(self, runtime: TaskRuntime,
+                          usage: dict | None = None) -> None:
         db.cancel_task(self._engine, runtime.task_id,
-                       stop_reason="user_cancelled")
+                       stop_reason="user_cancelled", usage=usage)
         self._record_terminal(runtime, "cancelled",
-                              {"stop_reason": "user_cancelled"})
+                              {"stop_reason": "user_cancelled",
+                               "usage": usage})
 
     # ---- emit 包装(取消检查点 + 进度跟踪 + 发布) ------------------------------
 

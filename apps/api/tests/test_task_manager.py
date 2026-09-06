@@ -14,7 +14,7 @@ import time
 import pytest
 
 from orca import db
-from orca.llm import LLMResult
+from orca.llm import LLMError, LLMResult
 from orca.persist import persist_task_results
 from orca.task_manager import ActiveTaskExists, TaskManager
 from tests.test_graph import (
@@ -155,6 +155,89 @@ def test_done_marks_over_budget_and_warns_when_actual_exceeds_limit(tmp_path):
     assert done.payload["usage"]["over_budget"] is True   # 事件路: 同一标记
     assert any(e.event == "warning" and "超" in e.payload.get("detail", "")
                for e in events)                     # 警告不静默
+
+
+def test_failed_task_records_known_usage_from_stream_error(tmp_path):
+    """R2 三路一致: 空流已收 usage(writer 8200)→ LLMError → task_failed。
+    已知成本须在 DB usage_json 与 task_failed 事件 payload.usage 两路可查
+    (第三路 orca cost 读 DB 即得), 不丢账、不静默。"""
+    engine = db.make_engine(tmp_path / "o.db")
+    db.init_db(engine)
+
+    def builder(budget):
+        tools, _e, _c = make_tools(happy_llm_sides(),
+                                   search_results=default_search_results())
+
+        def llm_chat_stream(messages, *, max_tokens, tier):
+            box: dict = {}
+
+            def gen():
+                # 复现真实时序: usage 帧先落账, 随后空流显式失败
+                box.update({"prompt_tokens": 6000, "completion_tokens": 2200,
+                            "total_tokens": 8200})
+                raise LLMError("流式响应空内容: 收到 [DONE] 但无正文片段")
+                yield ""  # pragma: no cover —— 使其成为生成器
+            return gen(), box
+
+        tools.llm_chat_stream = llm_chat_stream
+        tools.budget = budget
+        return tools
+
+    mgr = _make_manager(engine, builder)
+    task_id = mgr.create("Q")
+    assert mgr.wait(task_id, timeout=10)
+
+    total = 8200 + 450                    # writer + 研究侧(planner+reader×2)
+    task = db.get_task(engine, task_id)
+    assert task["status"] == "failed"
+    assert task["stop_reason"] == "execution_error"
+    assert task["usage_json"]["llm_tokens"] == total   # DB 路
+    events = mgr.events_after(task_id, 0)
+    assert events[-1].event == "task_failed"
+    assert events[-1].payload["usage"]["llm_tokens"] == total  # 事件路
+
+
+def test_cancelled_task_records_usage_from_stream_before_cancel(tmp_path):
+    """R2 取消分账: writer 流式中途取消(emit 检查点抛 TaskCancelled)
+    → 已收 usage 先 settle, cancelled 终态两路(DB/事件)均含该笔。"""
+    engine = db.make_engine(tmp_path / "o.db")
+    db.init_db(engine)
+    gate, release = threading.Event(), threading.Event()
+
+    def builder(budget):
+        tools, _e, _c = make_tools(happy_llm_sides(),
+                                   search_results=default_search_results())
+
+        def llm_chat_stream(messages, *, max_tokens, tier):
+            box: dict = {}
+
+            def gen():
+                yield "# 报告草稿"          # 第一片段正常 emit
+                gate.set()                  # 通知主线程取消请求落位
+                release.wait(timeout=5)
+                box.update({"prompt_tokens": 6000, "completion_tokens": 2200,
+                            "total_tokens": 8200})
+                yield "续段"                # 下一次 emit 检查点 → 取消
+            return gen(), box
+
+        tools.llm_chat_stream = llm_chat_stream
+        tools.budget = budget
+        return tools
+
+    mgr = _make_manager(engine, builder)
+    task_id = mgr.create("Q")
+    assert gate.wait(5), "writer 流式应已开始"
+    assert mgr.request_cancel(task_id)
+    release.set()
+    assert mgr.wait(task_id, timeout=10)
+
+    total = 8200 + 450
+    task = db.get_task(engine, task_id)
+    assert task["status"] == "cancelled"
+    assert task["usage_json"]["llm_tokens"] == total   # DB 路
+    events = mgr.events_after(task_id, 0)
+    assert events[-1].event == "cancelled"
+    assert events[-1].payload["usage"]["llm_tokens"] == total  # 事件路
 
 
 def test_done_not_emitted_when_persist_fails(tmp_path):

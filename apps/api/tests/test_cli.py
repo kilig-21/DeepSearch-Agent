@@ -195,3 +195,50 @@ def test_cmd_cost_tolerates_task_without_usage(tmp_path, capsys):
 
     assert cli.cmd_cost(ghost, db_path=db_path) == 0
     assert "LLM tokens: 0" in capsys.readouterr().out
+
+
+# ---- R2 分账: CLI/评测路径的失败与取消也要带 usage 落库 ----------------------
+
+def test_cmd_research_failure_records_known_usage(tmp_path, monkeypatch):
+    """评测 runner 走 cmd_research: 失败时 budget 里已 settle 的成本是
+    既成事实, 必须随 task_failed 落库与下发(实测 compare_http writer
+    流式 ReadTimeout 后 usage_json='{}' 丢账)。"""
+    from orca.llm import LLMError
+
+    payloads: list = []
+    monkeypatch.setattr(cli, "console_emit",
+                        lambda e, p: payloads.append((e, p)))
+
+    def failing_builder(budget):
+        budget.settle_llm(8200, for_writer=True)   # usage 帧先到的已知成本
+        raise LLMError("writer 流式中断: ReadTimeout")
+
+    db_path = tmp_path / "o.db"
+    rc = cli.cmd_research("Q", db_path=db_path, tools_builder=failing_builder)
+    assert rc == 1
+
+    eng = db.make_engine(db_path)
+    task = db.list_tasks(eng)[0]
+    assert task["status"] == "failed"
+    assert task["usage_json"]["llm_tokens"] == 8200
+
+    failed = [p for e, p in payloads if e == "task_failed"][-1]
+    assert failed["usage"]["llm_tokens"] == 8200
+
+
+def test_cmd_research_keyboard_interrupt_records_usage(tmp_path, monkeypatch):
+    """CLI 取消(Ctrl-C)路径同样分账: cancelled 终态带 usage。"""
+
+    def interrupting_builder(budget):
+        budget.settle_llm(500, for_writer=True)
+        raise KeyboardInterrupt
+
+    db_path = tmp_path / "o.db"
+    rc = cli.cmd_research("Q", db_path=db_path,
+                          tools_builder=interrupting_builder)
+    assert rc == 130
+
+    eng = db.make_engine(db_path)
+    task = db.list_tasks(eng)[0]
+    assert task["status"] == "cancelled"
+    assert task["usage_json"]["llm_tokens"] == 500

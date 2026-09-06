@@ -81,7 +81,7 @@ def cmd_research(topic: str, *, db_path=None, tools_builder=default_tools_builde
             allowed_domains=set(ALLOWED_DOMAINS), proxy=FETCH_PROXY is not None)
         if report_id is None:
             # CLI 无并发取消源, 理论不可达;防御: 终态已被抢先时按取消收尾(P6)
-            db.cancel_task(engine, task_id)
+            db.cancel_task(engine, task_id, usage=budget.usage_snapshot())
             if out is not None:
                 out.update(task_id=task_id)
             console_emit("cancelled", {})
@@ -100,16 +100,23 @@ def cmd_research(topic: str, *, db_path=None, tools_builder=default_tools_builde
         })
         return 0
     except KeyboardInterrupt:
-        db.cancel_task(engine, task_id)
+        # R2 分账: 已耗成本是事实, 取消终态同样落库(与 TaskManager 路径同构)
+        db.cancel_task(engine, task_id, usage=budget.usage_snapshot())
         if out is not None:
             out.update(task_id=task_id)
         console_emit("cancelled", {})
         return 130
     except Exception as e:  # noqa: BLE001
-        db.fail_task(engine, task_id, stop_reason="execution_error")
+        # R2 分账: 评测 runner 走本路径, 失败(如 writer 流式 ReadTimeout)
+        # 时 budget 里已 settle 的成本随 task_failed 落库, 禁止丢账
+        db.fail_task(engine, task_id, stop_reason="execution_error",
+                     usage=budget.usage_snapshot())
         if out is not None:
             out.update(task_id=task_id)
-        console_emit("task_failed", {"detail": f"{type(e).__name__}: {e}"})
+        console_emit("task_failed", {
+            "detail": f"{type(e).__name__}: {e}",
+            "stop_reason": "execution_error",
+            "usage": budget.usage_snapshot()})
         return 1
 
 

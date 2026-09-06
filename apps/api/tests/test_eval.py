@@ -363,3 +363,81 @@ def test_main_meta_records_resolved_budget_and_guard_snapshot(tmp_path):
     metas = [json.loads(p.read_text(encoding="utf-8"))["meta"]
              for p in (tmp_path / "base").glob("run_*.json")]
     assert any(m["only_qids"] is None for m in metas)
+
+
+# ---- R6 守门: 基线快照预算逐行核验 ------------------------------------------
+
+def _latest_baseline_run() -> dict:
+    """baselines 下最新的守门对象(排除补跑 supplement 产物)。
+
+    按修改时间取最新;守门对象须为 45 行全量(合并产物 run_merged_* 或
+    --compare 全量 run), 行数由 test_latest_baseline_full_coverage 断言。
+    """
+    import json
+    from pathlib import Path
+
+    base = Path(__file__).resolve().parents[1] / "eval" / "baselines"
+    runs = sorted((p for p in base.glob("run_*.json")
+                   if "supplement" not in p.name),
+                  key=lambda p: p.stat().st_mtime)
+    assert runs, "baselines 下没有任何 run 快照"
+    return json.loads(runs[-1].read_text(encoding="utf-8"))
+
+
+def test_latest_baseline_meta_records_config_snapshot():
+    """R6 守门: 真实基线快照的 meta 参数自证齐全(R4a 契约落到产物)。"""
+    from orca import config, graph
+
+    run = _latest_baseline_run()
+    meta = run["meta"]
+    b = meta["budget_defaults"]
+    assert b["total_llm_tokens"] == config.BUDGET_TOTAL_LLM_TOKENS
+    assert b["writer_reserve_tokens"] == config.BUDGET_WRITER_RESERVE_TOKENS
+    assert b["max_tavily_credits"] == config.BUDGET_MAX_TAVILY_CREDITS
+    assert b["max_pages"] == config.BUDGET_MAX_PAGES
+    assert b["time_budget_s"] == config.BUDGET_TIME_S
+    assert meta["writer_max_tokens"] == graph._WRITER_MAX_TOKENS
+    assert meta["budget_guard"] == {"min_usable_output": 1024,
+                                    "prompt_margin": 512}
+    assert meta["only_qids"] is None   # 守门对象必须是全量产物
+
+
+def test_latest_baseline_full_coverage():
+    """R6 守门: 守门对象必须是完整计划的产物(无缺行), 防止部分行
+    快照冒充基线。合法形态: 27 行纯 reflect 全量, 或 45 行配对全量。"""
+    from orca.eval.questions import QUESTIONS
+
+    run = _latest_baseline_run()
+    keys = {(r["qid"], r["strategy"]) for r in run["results"]}
+    plan_reflect_only = {(q.qid, "reflect") for q in QUESTIONS}
+    plan_paired = set()
+    for q in QUESTIONS:
+        if q.mode == "online":
+            plan_paired |= {(q.qid, "single"), (q.qid, "reflect")}
+        else:
+            plan_paired.add((q.qid, "reflect"))
+    if keys != plan_reflect_only:
+        assert keys == plan_paired, (
+            f"既非 27 行纯 reflect 全量, 也非 45 行配对全量; "
+            f"缺行: {sorted((plan_paired | plan_reflect_only) - keys)}, "
+            f"多余行: {sorted(keys - plan_paired)}")
+
+
+def test_latest_baseline_all_rows_within_budget_cap():
+    """R6 守门: 最新基线快照 45/45 行实耗 tokens ≤ 该行总额度上限。
+
+    R1 调用前约束(剩余不足最小可用输出即不调用、走程序降级)后,
+    任何行——含 budget_total 熔断演示题——都不应再出现实耗越限
+    (修复前快照 budget_total/reflect 实耗 169 > 上限 160, 即本守门
+    测试的 RED 依据)。
+    """
+    run = _latest_baseline_run()
+    total_cap = run["meta"]["budget_defaults"]["total_llm_tokens"]
+    offenders = []
+    for row in run["results"]:
+        overrides = row.get("budget_overrides") or {}
+        cap = overrides.get("total_llm_tokens", total_cap)
+        tokens = row.get("tokens") or 0
+        if tokens > cap:
+            offenders.append((row["qid"], row["strategy"], tokens, cap))
+    assert not offenders, f"实耗越限行(如实记录, 禁止静默): {offenders}"

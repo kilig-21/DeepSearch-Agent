@@ -206,6 +206,9 @@ def run_question(q: Question, *, db_path, builder, collector: dict,
         "status": task.get("status"), "stop_reason": task.get("stop_reason"),
         "tokens": usage.get("llm_tokens"),
         "credits": usage.get("tavily_credits"),
+        # F1b: usage 全量随行快照, 分账三键(llm_tokens = research + writer)
+        # 可自洽核验; 修复前产物无此键(其失败行 cost unknown)
+        "usage": usage or None,
         "duration_s": duration_s,
         "citation_map": citation_map,
         "valid_citation_ratio": _valid_citation_ratio(report_md, citation_map),
@@ -291,11 +294,38 @@ def build_results_table(rows: list[dict]) -> str:
                       else ("pass" if r["safety"].get("pass") else "FAIL"))
         ratio = ("—" if r["valid_citation_ratio"] is None
                  else f"{r['valid_citation_ratio']:.2f}")
+
+        def cost(v):
+            # F1c: 成本未知(修复前失败行 usage 缺失)不留 None 歧义
+            return "cost_unknown" if v is None else v
+
         lines.append(
             f"| {r['qid']} | {r['mode']} | {r['strategy']} | "
-            f"{r['status']} | {r['stop_reason']} | {r['tokens']} | "
-            f"{r['credits']} | {ratio} | {safety_txt} |")
+            f"{r['status']} | {r['stop_reason']} | {cost(r['tokens'])} | "
+            f"{cost(r['credits'])} | {ratio} | {safety_txt} |")
     return "\n".join(lines) + "\n"
+
+
+def _git_commit() -> str | None:
+    """F3 产物绑定: 生成快照时的 git 短哈希(非仓库/失败时 None 如实)。"""
+    import subprocess
+
+    try:
+        return subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"],
+            capture_output=True, text=True, timeout=5, check=True,
+        ).stdout.strip() or None
+    except Exception:  # noqa: BLE001   非 git 环境/超时: 如实记 None
+        return None
+
+
+def _plan_hash(selected: list[Question], *, compare: bool) -> str:
+    """F3 产物绑定: 执行计划 (qid, strategy) 清单哈希, 产物与计划绑定。"""
+    import hashlib
+
+    payload = sorted(f"{q.qid}:{s}"
+                     for q, s in plan_compare(selected, compare=compare))
+    return hashlib.sha256("\n".join(payload).encode("utf-8")).hexdigest()[:12]
 
 
 def main(argv=None, *, db_path=None, baselines_dir: Path | None = None,
@@ -315,10 +345,12 @@ def main(argv=None, *, db_path=None, baselines_dir: Path | None = None,
                         help="在线题按单轮/反思循环两策略配对对比(§10.4)")
     args = parser.parse_args(argv)
 
+    started_at = _dt.datetime.now().astimezone().isoformat(timespec="seconds")
     selected = QUESTIONS
     if args.only:
         ids = [s.strip() for s in args.only.split(",") if s.strip()]
         selected = [get(qid) for qid in ids]
+    plan_hash = _plan_hash(selected, compare=args.compare)
 
     def default_builder_for(q: Question, strategy: str):
         return (make_online_builder() if q.mode == "online"
@@ -332,11 +364,13 @@ def main(argv=None, *, db_path=None, baselines_dir: Path | None = None,
     results = run_eval(selected, db_path=db,
                        builder_for=builder_for or default_builder_for,
                        compare=args.compare)
+    finished_at = _dt.datetime.now().astimezone().isoformat(timespec="seconds")
 
     ts = _dt.datetime.now().strftime("%Y%m%d_%H%M%S")
     out = out_dir / f"run_{ts}.json"
     # R4a: meta 自证实验配置 —— 预算/闸门参数为解析后的实际值,
     # only_qids 非空即补跑产物(与全量 run 可区分, 消除跨版本配对混淆)
+    # F3: 产物绑定 —— git commit / 运行起止 / 计划哈希
     out.write_text(json.dumps(
         {"meta": {"prompt_version": PROMPT_VERSION,
                   "models": {"daily": LLM_DAILY_MODEL,
@@ -351,7 +385,11 @@ def main(argv=None, *, db_path=None, baselines_dir: Path | None = None,
                   "budget_guard": {"min_usable_output": MIN_USABLE_OUTPUT,
                                    "prompt_margin": PROMPT_MARGIN},
                   "only_qids": ([s.strip() for s in args.only.split(",")
-                                 if s.strip()] if args.only else None)},
+                                 if s.strip()] if args.only else None),
+                  "git_commit": _git_commit(),
+                  "run_started_at": started_at,
+                  "run_finished_at": finished_at,
+                  "plan_hash": plan_hash},
          "results": results}, ensure_ascii=False, indent=2), encoding="utf-8")
     table = out_dir / f"table_{ts}.md"
     table.write_text(build_results_table(results), encoding="utf-8")

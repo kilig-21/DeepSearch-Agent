@@ -48,6 +48,15 @@ def _offline_builder_for(q):
     return runner.make_offline_builder(q, llm_chat=fake_llm_chat)
 
 
+def _failing_builder_for(q):
+    """tools_builder 构建即抛: 驱动 cmd_research 的失败路径
+    (链路节点内的 LLM 异常会被程序降级吞掉, 无法到顶层 except)。"""
+    def boom(budget):
+        raise RuntimeError("模拟组件故障")
+
+    return boom
+
+
 def test_offline_fetch_fail_runs_without_network(tmp_path):
     """抓取失败题: fetch 全部抛错 → no_new_evidence + 程序说明。"""
     q = questions.get("fetch_fail")
@@ -314,6 +323,43 @@ def test_results_table_pairs_strategies_side_by_side():
     assert [ln.split("|")[3].strip() for ln in lines] == ["single", "reflect"]
 
 
+def test_results_table_marks_unknown_cost_explicitly():
+    """F1c: 成本未知行不留 None 歧义, 显式标 cost_unknown。"""
+    rows = [
+        _table_row(qid="a"),
+        _table_row(qid="b", status="failed", stop_reason="execution_error",
+                   tokens=None, credits=None, valid_citation_ratio=None),
+    ]
+    md = runner.build_results_table(rows)
+    b_line = next(ln for ln in md.splitlines() if ln.startswith("| b "))
+    assert "None" not in b_line
+    assert b_line.count("cost_unknown") == 2   # tokens 与 credits 两列
+
+
+def test_runner_row_records_full_usage_breakdown(tmp_path):
+    """F1b: row 快照带 usage 全量, 分账三键可自洽核验
+    (llm_tokens == research + writer)。"""
+    q = questions.get("fetch_fail")
+    collector = {}
+    runner.run_question(q, db_path=tmp_path / "eval.db",
+                        builder=_offline_builder_for(q), collector=collector)
+    usage = collector["row"]["usage"]
+    assert usage["llm_tokens"] == (usage["llm_research_tokens"]
+                                   + usage["llm_writer_tokens"])
+
+
+def test_runner_failed_row_records_nonempty_usage(tmp_path):
+    """F1b: 修复后失败的行 usage 必须非空(禁止丢账)。"""
+    q = questions.get("fetch_fail")
+    collector = {}
+    runner.run_question(q, db_path=tmp_path / "eval.db",
+                        builder=_failing_builder_for(q), collector=collector)
+    row = collector["row"]
+    assert row["status"] == "failed"
+    assert row["usage"], "失败行 usage 不得为空(禁止丢账)"
+    assert "llm_tokens" in row["usage"]
+
+
 # ---- 一条命令入口 ------------------------------------------------------------
 
 def test_main_writes_baseline_and_table(tmp_path):
@@ -353,6 +399,12 @@ def test_main_meta_records_resolved_budget_and_guard_snapshot(tmp_path):
     assert meta["budget_guard"] == {"min_usable_output": 1024,
                                     "prompt_margin": 512}
     assert meta["only_qids"] == ["fetch_fail"]   # 非全量 → 补跑标记可追溯
+
+    # F3 产物绑定: 快照可追溯到确切代码版本与执行计划
+    assert meta["git_commit"], "meta 应记录生成时 git commit(仓库内)"
+    assert meta["run_started_at"] and meta["run_finished_at"]
+    assert meta["run_started_at"] <= meta["run_finished_at"]
+    assert len(meta["plan_hash"]) == 12   # qid/strategy 清单哈希(sha256 前 12)
 
     # 全量跑(无 --only)→ only_qids 为 None, 与补跑产物可区分
     rc = runner.main([],
@@ -424,20 +476,38 @@ def test_latest_baseline_full_coverage():
 
 
 def test_latest_baseline_all_rows_within_budget_cap():
-    """R6 守门: 最新基线快照 45/45 行实耗 tokens ≤ 该行总额度上限。
+    """R6/F1 守门: 逐行预算核验;成本未知行显式隔离, 不折算为 0。
 
-    R1 调用前约束(剩余不足最小可用输出即不调用、走程序降级)后,
-    任何行——含 budget_total 熔断演示题——都不应再出现实耗越限
-    (修复前快照 budget_total/reflect 实耗 169 > 上限 160, 即本守门
-    测试的 RED 依据)。
+    - 有数值行: tokens/credits 必须为非负整数, tokens ≤ 行总额度上限
+    - cost_unknown 行(tokens=None): 只允许出现在 failed/cancelled 行
+      (修复前产物; 修复后失败行 usage 随终态落库 → tokens 有数值),
+      不计入"预算内"集合
+    - 行内 usage 全量键存在时: 分账三键自洽
+      (llm_tokens == research + writer)
     """
     run = _latest_baseline_run()
     total_cap = run["meta"]["budget_defaults"]["total_llm_tokens"]
     offenders = []
+    cost_unknown = []
     for row in run["results"]:
         overrides = row.get("budget_overrides") or {}
         cap = overrides.get("total_llm_tokens", total_cap)
-        tokens = row.get("tokens") or 0
+        tokens = row.get("tokens")
+        credits = row.get("credits")
+        if tokens is None:
+            cost_unknown.append((row["qid"], row["strategy"], row["status"]))
+            assert credits is None   # 成本未知是整行状态, 不允许半知半解
+            continue
+        assert isinstance(tokens, int) and tokens >= 0, (row["qid"], tokens)
+        assert isinstance(credits, int) and credits >= 0, (row["qid"], credits)
         if tokens > cap:
             offenders.append((row["qid"], row["strategy"], tokens, cap))
+        usage = row.get("usage")
+        if usage:   # 修复后产物带 usage 全量; 旧行无此键, 跳过
+            assert usage["llm_tokens"] == (usage["llm_research_tokens"]
+                                           + usage["llm_writer_tokens"]), \
+                f"{row['qid']}/{row['strategy']} 分账三键不自洽"
+    for qid, strategy, status in cost_unknown:
+        assert status in ("failed", "cancelled"), (
+            f"completed 行不得成本未知: {qid}/{strategy}/{status}")
     assert not offenders, f"实耗越限行(如实记录, 禁止静默): {offenders}"

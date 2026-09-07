@@ -511,3 +511,51 @@ def test_latest_baseline_all_rows_within_budget_cap():
         assert status in ("failed", "cancelled"), (
             f"completed 行不得成本未知: {qid}/{strategy}/{status}")
     assert not offenders, f"实耗越限行(如实记录, 禁止静默): {offenders}"
+
+
+# ---- F4 终审守门: 标注定版分可复算 ------------------------------------------
+
+def test_final_adjudicated_annotation_score():
+    """F4 终审守门: 标注 v1 的终审定版分可从断言复算且与 meta 自洽。
+
+    - 31 条 divergences 均有终审 final 字段(已定版, 2026-09-07)
+    - (qid, index, text) 三重匹配不错位; questions 分歧断言带 final_mark
+    - 终审分(mark 取 final_mark, 缺省回退 pass1 mark)复算 =
+      meta.final_score = 100.5/122 ≈ 0.8238(严格口径 quote-only)
+    """
+    import json
+    from pathlib import Path
+
+    W = {"support": 1.0, "partial": 0.5, "not_support": 0.0}
+    base = Path(__file__).resolve().parents[1] / "eval" / "baselines"
+    ann = json.loads(
+        (base / "annotations_20260907_v1.json").read_text(encoding="utf-8"))
+
+    divs = ann["divergences"]
+    assert len(divs) == 31
+    assert all("final" in d and d["final"] in W for d in divs), \
+        "31 条分歧均须有合法的终审 final 字段"
+
+    q_asserts = {q["qid"]: q["assertions"] for q in ann["questions"]}
+    div_keys = set()
+    for d in divs:
+        key = (d["qid"], d["index"])
+        div_keys.add(key)
+        a = q_asserts[d["qid"]][d["index"]]
+        assert a["text"] == d["text"], f"三重匹配错位: {key}"
+        assert a.get("final_mark") == d["final"], \
+            f"questions 断言 final_mark 与裁定不一致: {key}"
+
+    num = 0.0
+    den = 0
+    for q in ann["questions"]:
+        for i, a in enumerate(q["assertions"]):
+            mark = a["final_mark"] if "final_mark" in a else a["mark"]
+            num += W[mark]
+            den += 1
+
+    fs = ann["meta"]["final_score"]
+    assert fs["caliber"] == "strict(quote-only 终审定版)"
+    assert den == fs["denominator"] == 122
+    assert num == fs["numerator"] == 100.5
+    assert round(num / den, 4) == fs["rate"] == 0.8238

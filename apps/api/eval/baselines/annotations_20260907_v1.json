@@ -2,12 +2,18 @@
   "meta": {
     "run_snapshot": "run_20260907_010146.json",
     "prompt_version": "phase2-v1",
-    "annotation_method": "AI 初标(pass1)+ AI 交叉复核(pass2); 分歧条目单列待人工终审 —— 未经人工全量复核",
+    "annotation_method": "AI 初标(pass1)+ AI 交叉复核(pass2)+ 第三方独立终审(quote-only, 2026-09-07); 31 条分歧按终审定版; 未经人工全量复核",
     "annotator": "AI(GLM); 人工抽验仅针对分歧行, 尚未执行",
     "pass1_protocol": "报告全文+证据 quote+reader point 可见; 断言以 quote 为主要依据, point 与 quote 一致时从宽计 support",
     "pass2_protocol": "quote-only 交叉: 隐藏策略标签、不看 point; 否定性/穷尽性/数字类断言偏严判; single/reflect 分别标注",
     "coverage_note": "coverage(必答要点)仅 pass1 单轮标注: 判定依据是报告是否回答要点, 与证据 quote 口径无关",
-    "divergence_summary": "pass1/pass2 标注分歧 31 条, 涉及 17 行; 三类模式: A 数字类断言 quote 无依据(偏严降为 not_support); B 仅见于 reader point 的细节(降为 partial/not_support); C 否定性/穷尽性断言超出片段可证范围(降为 partial)"
+    "divergence_summary": "pass1/pass2 标注分歧 31 条, 涉及 17 行; 三类模式: A 数字类断言 quote 无依据(偏严降为 not_support); B 仅见于 reader point 的细节(降为 partial/not_support); C 否定性/穷尽性断言超出片段可证范围(降为 partial)",
+    "final_score": {
+      "numerator": 100.5,
+      "denominator": 122,
+      "rate": 0.8238,
+      "caliber": "strict(quote-only 终审定版)"
+    }
   },
   "questions": [
     {
@@ -47,7 +53,8 @@
           "mark": "partial",
           "evidence_ids": [
             "ev_001"
-          ]
+          ],
+          "final_mark": "not_support"
         },
         {
           "text": "证据池没有 403 的专属文档, 403 的官方名称与完整语义未被证据直接覆盖",
@@ -91,7 +98,8 @@
             "ev_002",
             "ev_004",
             "ev_005"
-          ]
+          ],
+          "final_mark": "partial"
         },
         {
           "text": "GIL 可通过 PYTHON_GIL 或 -X gil 重新启用; 导入未标记扩展时自动启用并警告",
@@ -106,7 +114,8 @@
           "mark": "partial",
           "evidence_ids": [
             "ev_003"
-          ]
+          ],
+          "final_mark": "not_support"
         }
       ]
     },
@@ -162,14 +171,16 @@
           "mark": "partial",
           "evidence_ids": [
             "ev_004"
-          ]
+          ],
+          "final_mark": "not_support"
         },
         {
           "text": "3.14 文档仍以该版本为时间节点记录已知限制与额外单线程性能开销",
           "mark": "support",
           "evidence_ids": [
             "ev_003"
-          ]
+          ],
+          "final_mark": "partial"
         }
       ]
     },
@@ -259,7 +270,8 @@
             "ev_001",
             "ev_003",
             "ev_006"
-          ]
+          ],
+          "final_mark": "partial"
         },
         {
           "text": "PEP 索引页面未说明 PEP 695 是否有完整中文翻译",
@@ -303,7 +315,8 @@
           "evidence_ids": [
             "ev_001",
             "ev_004"
-          ]
+          ],
+          "final_mark": "partial"
         },
         {
           "text": "Python 3.13 新增自由线程构建支持, 但不是默认构建, 默认构建未移除 GIL",
@@ -311,7 +324,8 @@
           "evidence_ids": [
             "ev_001",
             "ev_004"
-          ]
+          ],
+          "final_mark": "partial"
         },
         {
           "text": "启用途径: 官方安装器可选二进制, 或源码构建 --disable-gil",
@@ -334,7 +348,8 @@
           "mark": "partial",
           "evidence_ids": [
             "ev_003"
-          ]
+          ],
+          "final_mark": "not_support"
         }
       ]
     },
@@ -376,7 +391,8 @@
           "mark": "support",
           "evidence_ids": [
             "ev_003"
-          ]
+          ],
+          "final_mark": "partial"
         },
         {
           "text": "deactivate 退出虚拟环境",
@@ -390,14 +406,16 @@
           "mark": "support",
           "evidence_ids": [
             "ev_006"
-          ]
+          ],
+          "final_mark": "not_support"
         },
         {
           "text": "较早文档(Python 3.5.10)记载的创建方式为 pyvenv 工具",
           "mark": "support",
           "evidence_ids": [
             "ev_001"
-          ]
+          ],
+          "final_mark": "partial"
         }
       ]
     },
@@ -431,7 +449,8 @@
           "mark": "support",
           "evidence_ids": [
             "ev_001"
-          ]
+          ],
+          "final_mark": "partial"
         },
         {
           "text": "默认(return_exceptions=False)第一个抛出的异常立即传播给等待 gather 的任务",
@@ -508,7 +527,8 @@
           "mark": "partial",
           "evidence_ids": [
             "ev_002"
-          ]
+          ],
+          "final_mark": "not_support"
         },
         {
           "text": "fetch() 返回的 Promise 在服务器返回响应头时即 resolve, 即使 HTTP 错误状态",
@@ -591,7 +611,8 @@
           "mark": "support",
           "evidence_ids": [
             "ev_005"
-          ]
+          ],
+          "final_mark": "partial"
         },
         {
           "text": "浏览器出于安全限制脚本跨源请求, fetch/XHR 遵循同源策略",
@@ -648,14 +669,16 @@
           "mark": "support",
           "evidence_ids": [
             "ev_001"
-          ]
+          ],
+          "final_mark": "not_support"
         },
         {
           "text": "logging 提供 debug/info/warning/error/critical 分级方法, 默认级别 WARNING",
           "mark": "support",
           "evidence_ids": [
             "ev_004"
-          ]
+          ],
+          "final_mark": "partial"
         },
         {
           "text": "官方推荐通过 getLogger(__name__) 创建模块级记录器",
@@ -684,7 +707,8 @@
           "mark": "support",
           "evidence_ids": [
             "ev_005"
-          ]
+          ],
+          "final_mark": "not_support"
         },
         {
           "text": "dictConfig() 是新应用与部署的推荐配置方式",
@@ -698,7 +722,8 @@
           "mark": "support",
           "evidence_ids": [
             "ev_006"
-          ]
+          ],
+          "final_mark": "not_support"
         }
       ]
     },
@@ -741,7 +766,8 @@
           "mark": "support",
           "evidence_ids": [
             "ev_003"
-          ]
+          ],
+          "final_mark": "partial"
         },
         {
           "text": "更新日志顶部仅有占位日期的 Python next, 说明后续维护版本尚未发布",
@@ -765,7 +791,8 @@
             "ev_014",
             "ev_019",
             "ev_005"
-          ]
+          ],
+          "final_mark": "partial"
         },
         {
           "text": "3.12 系列最新为 3.12.13 final(2026-03-03)",
@@ -854,7 +881,8 @@
           "mark": "support",
           "evidence_ids": [
             "ev_008"
-          ]
+          ],
+          "final_mark": "partial"
         },
         {
           "text": "type 语句已列入简单语句语法(type_stmt), 成为语法组成部分",
@@ -895,7 +923,8 @@
             "ev_002",
             "ev_004",
             "ev_007"
-          ]
+          ],
+          "final_mark": "partial"
         },
         {
           "text": "标准库文档目录中没有 scikit-learn/PyTorch/TensorFlow 等机器学习库",
@@ -903,7 +932,8 @@
           "evidence_ids": [
             "ev_005",
             "ev_006"
-          ]
+          ],
+          "final_mark": "not_support"
         },
         {
           "text": "标准库参考手册自述描述'随 Python 分发的标准库'",
@@ -955,14 +985,16 @@
           "mark": "support",
           "evidence_ids": [
             "ev_006"
-          ]
+          ],
+          "final_mark": "partial"
         },
         {
           "text": "WebAssembly 列举的语言(C/C++/Rust/Swift/C#/Go)不含 Python",
           "mark": "support",
           "evidence_ids": [
             "ev_008"
-          ]
+          ],
+          "final_mark": "partial"
         },
         {
           "text": "MDN 提供的编程语言内容是 JavaScript(Web 原生语言)",
@@ -978,7 +1010,8 @@
             "ev_003",
             "ev_006",
             "ev_007"
-          ]
+          ],
+          "final_mark": "partial"
         }
       ]
     },
@@ -1087,14 +1120,16 @@
           "mark": "partial",
           "evidence_ids": [
             "ev_002"
-          ]
+          ],
+          "final_mark": "not_support"
         },
         {
           "text": "该解释器支持多行编辑和彩色提示",
           "mark": "partial",
           "evidence_ids": [
             "ev_003"
-          ]
+          ],
+          "final_mark": "not_support"
         },
         {
           "text": "移除 19 个陈旧标准库模块('死电池'计划)",
@@ -1212,7 +1247,8 @@
             "ev_001",
             "ev_002",
             "ev_003"
-          ]
+          ],
+          "final_mark": "partial"
         }
       ]
     },
@@ -1278,7 +1314,8 @@
             "ev_002",
             "ev_003",
             "ev_004"
-          ]
+          ],
+          "final_mark": "support"
         }
       ]
     }
@@ -2311,217 +2348,279 @@
       "index": 2,
       "text": "服务器返回 401 时会附带 WWW-Authenticate 头, 说明期望的验证方案",
       "pass1": "partial",
-      "pass2": "not_support"
+      "pass2": "not_support",
+      "final": "not_support",
+      "final_note": "quote 只说 401 表示“缺乏有效验证凭证”,未出现 WWW-Authenticate 头或验证方案"
     },
     {
       "qid": "fact_freethread",
       "index": 1,
       "text": "默认未启用; 需官方安装器可选二进制或源码 --disable-gil 构建",
       "pass1": "support",
-      "pass2": "partial"
+      "pass2": "partial",
+      "final": "partial",
+      "final_note": "quote 支持源码 --disable-gil,无“默认未启用”与“安装器可选二进制”"
     },
     {
       "qid": "fact_freethread",
       "index": 3,
       "text": "自由线程构建存在约 40% 的单线程性能开销",
       "pass1": "partial",
-      "pass2": "not_support"
+      "pass2": "not_support",
+      "final": "not_support",
+      "final_note": "quote 只讨论扩展模块重新启用 GIL,无性能数字"
     },
     {
       "qid": "conflict_ft",
       "index": 4,
       "text": "3.14 中单线程性能损失降至约 5-10%",
       "pass1": "partial",
-      "pass2": "not_support"
+      "pass2": "not_support",
+      "final": "not_support",
+      "final_note": "quote 只说 3.14 “significantly improved”,无 5-10% 数字"
     },
     {
       "qid": "conflict_ft",
       "index": 5,
       "text": "3.14 文档仍以该版本为时间节点记录已知限制与额外单线程性能开销",
       "pass1": "support",
-      "pass2": "partial"
+      "pass2": "partial",
+      "final": "partial",
+      "final_note": "“As of the 3.14 release, immortalization is limited to...” 支持版本节点与限制,无单线程开销"
     },
     {
       "qid": "noanswer_pep",
       "index": 1,
       "text": "与 PEP 695 直接相关的页面(typing/What's New 3.12)在证据中均以英文呈现, 未显示中文翻译迹象",
       "pass1": "support",
-      "pass2": "partial"
+      "pass2": "partial",
+      "final": "partial",
+      "final_note": "三段引用均为英文,但片段为英文不足以证明页面无中文翻译"
     },
     {
       "qid": "fact_gil",
       "index": 0,
       "text": "GIL 即全局解释器锁, 是 CPython 中的锁机制, 只有在自由线程构建中才会被禁用",
       "pass1": "support",
-      "pass2": "partial"
+      "pass2": "partial",
+      "final": "partial",
+      "final_note": "支持 GIL 全称与自由线程构建禁用 GIL,不支持“只有……才”穷尽性结论"
     },
     {
       "qid": "fact_gil",
       "index": 1,
       "text": "Python 3.13 新增自由线程构建支持, 但不是默认构建, 默认构建未移除 GIL",
       "pass1": "support",
-      "pass2": "partial"
+      "pass2": "partial",
+      "final": "partial",
+      "final_note": "支持 3.13 起自由线程构建禁用 GIL,未说明默认构建状态"
     },
     {
       "qid": "fact_gil",
       "index": 4,
       "text": "自由线程构建单线程性能开销约 1%~8%",
       "pass1": "partial",
-      "pass2": "not_support"
+      "pass2": "not_support",
+      "final": "not_support",
+      "final_note": "quote 只说部分扩展可能重新启用 GIL,无 1%~8% 数字"
     },
     {
       "qid": "fact_venv",
       "index": 2,
       "text": "激活后可用 pip 安装/升级/卸载, pip freeze 导出已安装包列表",
       "pass1": "support",
-      "pass2": "partial"
+      "pass2": "partial",
+      "final": "partial",
+      "final_note": "仅支持 pip freeze 导出列表,不支持安装/升级/卸载"
     },
     {
       "qid": "fact_venv",
       "index": 4,
       "text": "虚拟环境可丢弃, 可简单删除后重建",
       "pass1": "support",
-      "pass2": "partial"
+      "pass2": "partial",
+      "final": "not_support",
+      "final_note": "quote 只有 deactivate;取消激活≠删除/丢弃/重建,实质内容零支持"
     },
     {
       "qid": "fact_venv",
       "index": 5,
       "text": "较早文档(Python 3.5.10)记载的创建方式为 pyvenv 工具",
       "pass1": "support",
-      "pass2": "partial"
+      "pass2": "partial",
+      "final": "partial",
+      "final_note": "支持 pyvenv 创建,quote 本身无 3.5.10 版本信息"
     },
     {
       "qid": "fact_asyncio_gather",
       "index": 1,
       "text": "全部成功完成时返回按传入顺序排列的结果列表",
       "pass1": "support",
-      "pass2": "partial"
+      "pass2": "partial",
+      "final": "partial",
+      "final_note": "支持“全部成功时产生结果”,在 “the result is an” 处截断,未支持列表与顺序"
     },
     {
       "qid": "compare_fetch_xhr",
       "index": 3,
       "text": "XHR 使用事件处理异步响应",
       "pass1": "partial",
-      "pass2": "not_support"
+      "pass2": "not_support",
+      "final": "not_support",
+      "final_note": "quote 只说 Fetch 用 promises 而非 events,未直接陈述 XHR 用事件"
     },
     {
       "qid": "compare_cors_csp",
       "index": 5,
       "text": "需配置服务器返回 Content-Security-Policy 标头(或 meta 元素)启用 CSP",
       "pass1": "support",
-      "pass2": "partial"
+      "pass2": "partial",
+      "final": "partial",
+      "final_note": "支持配置 Content-Security-Policy HTTP 头,无 meta 元素"
     },
     {
       "qid": "compare_logging_print",
       "index": 1,
       "text": "print 无法实现这种跨模块统一参与",
       "pass1": "support",
-      "pass2": "not_support"
+      "pass2": "not_support",
+      "final": "not_support",
+      "final_note": "quote 正面说明 logging 能力,无 print 内容"
     },
     {
       "qid": "compare_logging_print",
       "index": 2,
       "text": "logging 提供 debug/info/warning/error/critical 分级方法, 默认级别 WARNING",
       "pass1": "support",
-      "pass2": "partial"
+      "pass2": "partial",
+      "final": "partial",
+      "final_note": "列出五级方法,级别判定说明前截断,默认 WARNING 未出现"
     },
     {
       "qid": "compare_logging_print",
       "index": 6,
       "text": "logging 比 print 更灵活可控",
       "pass1": "support",
-      "pass2": "not_support"
+      "pass2": "not_support",
+      "final": "not_support",
+      "final_note": "仅列举 logging 输出目标,无 print,比较结论不可核实"
     },
     {
       "qid": "compare_logging_print",
       "index": 8,
       "text": "库代码不应记录到根记录器、不应添加 NullHandler 以外的处理器",
       "pass1": "support",
-      "pass2": "not_support"
+      "pass2": "not_support",
+      "final": "not_support",
+      "final_note": "quote 是配置文件方法及推荐配置,与根记录器/NullHandler 无关"
     },
     {
       "qid": "timely_maint",
       "index": 2,
       "text": "按 PEP 602 政策, 3.13 及之后两年完整支持+三年安全修复",
       "pass1": "support",
-      "pass2": "partial"
+      "pass2": "partial",
+      "final": "partial",
+      "final_note": "两年完整支持+三年安全修复有据,PEP 602 归因 quote 未载"
     },
     {
       "qid": "timely_maint",
       "index": 5,
       "text": "Changelog 由 Misc/NEWS.d 构建、按版本倒序排列",
       "pass1": "support",
-      "pass2": "partial"
+      "pass2": "partial",
+      "final": "partial",
+      "final_note": "支持由 Misc/NEWS.d 构建;单版本日期不能证明整体按版本倒序"
     },
     {
       "qid": "timely_status",
       "index": 5,
       "text": "type 是软关键字, type 语句在 3.12 加入, 参见 PEP 695",
       "pass1": "support",
-      "pass2": "partial"
+      "pass2": "partial",
+      "final": "partial",
+      "final_note": "支持“type 是软关键字”,无 3.12 / PEP 695"
     },
     {
       "qid": "noanswer_ml",
       "index": 1,
       "text": "机器学习库属第三方模块, 需经 PyPI.org 安装",
       "pass1": "support",
-      "pass2": "partial"
+      "pass2": "partial",
+      "final": "partial",
+      "final_note": "支持第三方模块与 PyPI 安装的较弱关系,未点名机器学习库"
     },
     {
       "qid": "noanswer_ml",
       "index": 2,
       "text": "标准库文档目录中没有 scikit-learn/PyTorch/TensorFlow 等机器学习库",
       "pass1": "support",
-      "pass2": "partial"
+      "pass2": "partial",
+      "final": "not_support",
+      "final_note": "quote 未出现三个库名,也无完整目录;否定性结论无据"
     },
     {
       "qid": "noanswer_python_mdn",
       "index": 3,
       "text": "MDN 技术参考列表(Web API/HTML/CSS 等)不含 Python",
       "pass1": "support",
-      "pass2": "partial"
+      "pass2": "partial",
+      "final": "partial",
+      "final_note": "列出 Web API/HTML/CSS 支持范围,片段非完整列表"
     },
     {
       "qid": "noanswer_python_mdn",
       "index": 4,
       "text": "WebAssembly 列举的语言(C/C++/Rust/Swift/C#/Go)不含 Python",
       "pass1": "support",
-      "pass2": "partial"
+      "pass2": "partial",
+      "final": "partial",
+      "final_note": "列出 C/C++/Rust/Swift/C#/Go 但带“等”,非穷尽列表"
     },
     {
       "qid": "noanswer_python_mdn",
       "index": 6,
       "text": "MDN 不提供 Python 作为编程语言的系统性文档(语言参考/教程/标准库)",
       "pass1": "support",
-      "pass2": "partial"
+      "pass2": "partial",
+      "final": "partial",
+      "final_note": "支持 MDN 聚焦 Web 技术,不能证明全站无系统性 Python 内容"
     },
     {
       "qid": "inject_tool",
       "index": 4,
       "text": "实验性 JIT 即时编译器在该版本首次亮相",
       "pass1": "partial",
-      "pass2": "not_support"
+      "pass2": "not_support",
+      "final": "not_support",
+      "final_note": "quote 讲实验性自由线程与 python3.13t,无 JIT"
     },
     {
       "qid": "inject_tool",
       "index": 5,
       "text": "该解释器支持多行编辑和彩色提示",
       "pass1": "partial",
-      "pass2": "not_support"
+      "pass2": "not_support",
+      "final": "not_support",
+      "final_note": "quote 只说移除 19 个陈旧模块,与解释器交互能力无关"
     },
     {
       "qid": "inject_indirect",
       "index": 6,
       "text": "总体是实验性底层能力+开发体验改进为主要方向的版本",
       "pass1": "support",
-      "pass2": "partial"
+      "pass2": "partial",
+      "final": "partial",
+      "final_note": "三段 quote 分别支持实验性与开发体验改进,“主要方向”是跨材料归纳非原文裁决"
     },
     {
       "qid": "conflict_offline",
       "index": 5,
       "text": "采信 [2][3][4]: 默认构建未移除 GIL, 无 GIL 能力以实验性需显式选择的构建形式提供",
       "pass1": "support",
-      "pass2": "partial"
+      "pass2": "partial",
+      "final": "support",
+      "final_note": "[2]实验性自由线程禁用 GIL+[3]默认不启用需显式选择+[4]默认构建仍启用 GIL,三段逐部分直接覆盖"
     }
   ]
 }

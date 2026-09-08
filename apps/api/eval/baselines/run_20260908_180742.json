@@ -1,0 +1,491 @@
+{
+  "meta": {
+    "prompt_version": "phase2-v1",
+    "models": {
+      "daily": "glm-5.3-flash",
+      "high_quality": "glm-5.3"
+    },
+    "budget_defaults": {
+      "total_llm_tokens": 50000,
+      "writer_reserve_tokens": 8000,
+      "max_tavily_credits": 16,
+      "max_pages": 12,
+      "time_budget_s": 480.0
+    },
+    "writer_max_tokens": 16384,
+    "budget_guard": {
+      "min_usable_output": 1024,
+      "prompt_margin": 512
+    },
+    "only_qids": [
+      "fact_freethread",
+      "noanswer_pep",
+      "fact_gil",
+      "fact_venv",
+      "compare_logging_print",
+      "timely_maint",
+      "timely_status",
+      "noanswer_ml"
+    ],
+    "git_commit": "e62e4a1",
+    "run_started_at": "2026-09-08T18:07:04+08:00",
+    "run_finished_at": "2026-09-08T18:07:42+08:00",
+    "plan_hash": "b6ddfeaa5443"
+  },
+  "results": [
+    {
+      "qid": "fact_freethread",
+      "qtype": "fact",
+      "mode": "online",
+      "topic": "Python 3.13 的自由线程模式是什么?默认是否启用?",
+      "strategy": "reflect",
+      "task_id": "t_20e21e424e78",
+      "report_id": 129,
+      "status": "completed",
+      "stop_reason": "execution_error",
+      "tokens": 0,
+      "credits": 0,
+      "usage": {
+        "llm_tokens": 0,
+        "llm_research_tokens": 0,
+        "llm_writer_tokens": 0,
+        "tavily_credits": 0,
+        "jina_tokens": 0,
+        "over_budget": false
+      },
+      "duration_s": 4.6,
+      "citation_map": {},
+      "valid_citation_ratio": null,
+      "report_md": "# 研究未能完成\n\n针对问题「Python 3.13 的自由线程模式是什么?默认是否启用?」,研究过程发生程序异常。\n\n本说明由程序生成,未经模型撰写,不包含未经核实的研究结论。",
+      "evidences": [],
+      "events": [
+        {
+          "event": "warning",
+          "payload": {
+            "stage": "planner",
+            "detail": "规划失败: 重试耗尽(3 次尝试): HTTP 429: 可重试"
+          }
+        },
+        {
+          "event": "report_delta",
+          "payload": {
+            "md": "# 研究未能完成\n\n针对问题「Python 3.13 的自由线程模式是什么?默认是否启用?」,研究过程发生程序异常。\n\n本说明由程序生成,未经模型撰写,不包含未经核实的研究结论。",
+            "draft": true
+          }
+        }
+      ],
+      "eval_time": "2026-09-08T18:07:09",
+      "models": {
+        "daily": "glm-5.3-flash",
+        "high_quality": "glm-5.3",
+        "max_tokens_policy": "必填, 覆盖推理型思考段"
+      },
+      "prompt_version": "phase2-v1",
+      "budget_overrides": {},
+      "required_points": [
+        "自由线程是禁用 GIL 的 CPython 构建模式",
+        "属于实验性特性",
+        "默认构建不启用, 需专用可执行文件/构建选项"
+      ],
+      "annotation": null,
+      "safety": null
+    },
+    {
+      "qid": "noanswer_pep",
+      "qtype": "no_answer",
+      "mode": "online",
+      "topic": "docs.python.org 是否提供 PEP 695 的完整中文翻译?",
+      "strategy": "reflect",
+      "task_id": "t_353148e18f1c",
+      "report_id": 130,
+      "status": "completed",
+      "stop_reason": "execution_error",
+      "tokens": 0,
+      "credits": 0,
+      "usage": {
+        "llm_tokens": 0,
+        "llm_research_tokens": 0,
+        "llm_writer_tokens": 0,
+        "tavily_credits": 0,
+        "jina_tokens": 0,
+        "over_budget": false
+      },
+      "duration_s": 4.4,
+      "citation_map": {},
+      "valid_citation_ratio": null,
+      "report_md": "# 研究未能完成\n\n针对问题「docs.python.org 是否提供 PEP 695 的完整中文翻译?」,研究过程发生程序异常。\n\n本说明由程序生成,未经模型撰写,不包含未经核实的研究结论。",
+      "evidences": [],
+      "events": [
+        {
+          "event": "warning",
+          "payload": {
+            "stage": "planner",
+            "detail": "规划失败: 重试耗尽(3 次尝试): HTTP 429: 可重试"
+          }
+        },
+        {
+          "event": "report_delta",
+          "payload": {
+            "md": "# 研究未能完成\n\n针对问题「docs.python.org 是否提供 PEP 695 的完整中文翻译?」,研究过程发生程序异常。\n\n本说明由程序生成,未经模型撰写,不包含未经核实的研究结论。",
+            "draft": true
+          }
+        }
+      ],
+      "eval_time": "2026-09-08T18:07:13",
+      "models": {
+        "daily": "glm-5.3-flash",
+        "high_quality": "glm-5.3",
+        "max_tokens_policy": "必填, 覆盖推理型思考段"
+      },
+      "prompt_version": "phase2-v1",
+      "budget_overrides": {},
+      "required_points": [
+        "对'是否有完整中文翻译'给出有据结论(找不到即如实说明)",
+        "不编造不存在的翻译页面"
+      ],
+      "annotation": null,
+      "safety": null
+    },
+    {
+      "qid": "fact_gil",
+      "qtype": "fact",
+      "mode": "online",
+      "topic": "What is the global interpreter lock (GIL) in Python, and is it removed by default in Python 3.13?",
+      "strategy": "reflect",
+      "task_id": "t_e582b68f3b37",
+      "report_id": 131,
+      "status": "completed",
+      "stop_reason": "execution_error",
+      "tokens": 0,
+      "credits": 0,
+      "usage": {
+        "llm_tokens": 0,
+        "llm_research_tokens": 0,
+        "llm_writer_tokens": 0,
+        "tavily_credits": 0,
+        "jina_tokens": 0,
+        "over_budget": false
+      },
+      "duration_s": 4.5,
+      "citation_map": {},
+      "valid_citation_ratio": null,
+      "report_md": "# 研究未能完成\n\n针对问题「What is the global interpreter lock (GIL) in Python, and is it removed by default in Python 3.13?」,研究过程发生程序异常。\n\n本说明由程序生成,未经模型撰写,不包含未经核实的研究结论。",
+      "evidences": [],
+      "events": [
+        {
+          "event": "warning",
+          "payload": {
+            "stage": "planner",
+            "detail": "规划失败: 重试耗尽(3 次尝试): HTTP 429: 可重试"
+          }
+        },
+        {
+          "event": "report_delta",
+          "payload": {
+            "md": "# 研究未能完成\n\n针对问题「What is the global interpreter lock (GIL) in Python, and is it removed by default in Python 3.13?」,研究过程发生程序异常。\n\n本说明由程序生成,未经模型撰写,不包含未经核实的研究结论。",
+            "draft": true
+          }
+        }
+      ],
+      "eval_time": "2026-09-08T18:07:18",
+      "models": {
+        "daily": "glm-5.3-flash",
+        "high_quality": "glm-5.3",
+        "max_tokens_policy": "必填, 覆盖推理型思考段"
+      },
+      "prompt_version": "phase2-v1",
+      "budget_overrides": {},
+      "required_points": [
+        "GIL 的作用: 同一时刻仅一个线程执行 Python 字节码",
+        "Python 3.13 默认构建仍启用 GIL",
+        "自由线程(free-threading)是可选构建/安装选项, 非默认"
+      ],
+      "annotation": null,
+      "safety": null
+    },
+    {
+      "qid": "fact_venv",
+      "qtype": "fact",
+      "mode": "online",
+      "topic": "How do I create a virtual environment in Python with the venv module (python -m venv)?",
+      "strategy": "reflect",
+      "task_id": "t_d04e70c41c0d",
+      "report_id": 132,
+      "status": "completed",
+      "stop_reason": "execution_error",
+      "tokens": 0,
+      "credits": 0,
+      "usage": {
+        "llm_tokens": 0,
+        "llm_research_tokens": 0,
+        "llm_writer_tokens": 0,
+        "tavily_credits": 0,
+        "jina_tokens": 0,
+        "over_budget": false
+      },
+      "duration_s": 5.2,
+      "citation_map": {},
+      "valid_citation_ratio": null,
+      "report_md": "# 研究未能完成\n\n针对问题「How do I create a virtual environment in Python with the venv module (python -m venv)?」,研究过程发生程序异常。\n\n本说明由程序生成,未经模型撰写,不包含未经核实的研究结论。",
+      "evidences": [],
+      "events": [
+        {
+          "event": "warning",
+          "payload": {
+            "stage": "planner",
+            "detail": "规划失败: 重试耗尽(3 次尝试): HTTP 429: 可重试"
+          }
+        },
+        {
+          "event": "report_delta",
+          "payload": {
+            "md": "# 研究未能完成\n\n针对问题「How do I create a virtual environment in Python with the venv module (python -m venv)?」,研究过程发生程序异常。\n\n本说明由程序生成,未经模型撰写,不包含未经核实的研究结论。",
+            "draft": true
+          }
+        }
+      ],
+      "eval_time": "2026-09-08T18:07:23",
+      "models": {
+        "daily": "glm-5.3-flash",
+        "high_quality": "glm-5.3",
+        "max_tokens_policy": "必填, 覆盖推理型思考段"
+      },
+      "prompt_version": "phase2-v1",
+      "budget_overrides": {},
+      "required_points": [
+        "用 python -m venv <目录> 创建虚拟环境",
+        "激活: 各平台对应 activate 脚本(Windows/Unix 不同)",
+        "deactivate 退出虚拟环境"
+      ],
+      "annotation": null,
+      "safety": null
+    },
+    {
+      "qid": "compare_logging_print",
+      "qtype": "compare",
+      "mode": "online",
+      "topic": "Compare the Python logging module with print for diagnostics: what does the official logging documentation recommend?",
+      "strategy": "reflect",
+      "task_id": "t_11e6ca91b243",
+      "report_id": 133,
+      "status": "completed",
+      "stop_reason": "execution_error",
+      "tokens": 0,
+      "credits": 0,
+      "usage": {
+        "llm_tokens": 0,
+        "llm_research_tokens": 0,
+        "llm_writer_tokens": 0,
+        "tavily_credits": 0,
+        "jina_tokens": 0,
+        "over_budget": false
+      },
+      "duration_s": 4.5,
+      "citation_map": {},
+      "valid_citation_ratio": null,
+      "report_md": "# 研究未能完成\n\n针对问题「Compare the Python logging module with print for diagnostics: what does the official logging documentation recommend?」,研究过程发生程序异常。\n\n本说明由程序生成,未经模型撰写,不包含未经核实的研究结论。",
+      "evidences": [],
+      "events": [
+        {
+          "event": "warning",
+          "payload": {
+            "stage": "planner",
+            "detail": "规划失败: 重试耗尽(3 次尝试): HTTP 429: 可重试"
+          }
+        },
+        {
+          "event": "report_delta",
+          "payload": {
+            "md": "# 研究未能完成\n\n针对问题「Compare the Python logging module with print for diagnostics: what does the official logging documentation recommend?」,研究过程发生程序异常。\n\n本说明由程序生成,未经模型撰写,不包含未经核实的研究结论。",
+            "draft": true
+          }
+        }
+      ],
+      "eval_time": "2026-09-08T18:07:28",
+      "models": {
+        "daily": "glm-5.3-flash",
+        "high_quality": "glm-5.3",
+        "max_tokens_policy": "必填, 覆盖推理型思考段"
+      },
+      "prompt_version": "phase2-v1",
+      "budget_overrides": {},
+      "required_points": [
+        "logging 提供严重级别/格式化/输出目标分离",
+        "logging 适合诊断与生产(可按级别开关, 不改代码)",
+        "print 用于直接输出展示, 不具备级别与路由能力"
+      ],
+      "annotation": null,
+      "safety": null
+    },
+    {
+      "qid": "timely_maint",
+      "qtype": "timeliness",
+      "mode": "online",
+      "topic": "What is the latest bugfix (maintenance) release of Python 3.13 listed on docs.python.org as of 2026?",
+      "strategy": "reflect",
+      "task_id": "t_dcf26513fcc0",
+      "report_id": 134,
+      "status": "completed",
+      "stop_reason": "execution_error",
+      "tokens": 0,
+      "credits": 0,
+      "usage": {
+        "llm_tokens": 0,
+        "llm_research_tokens": 0,
+        "llm_writer_tokens": 0,
+        "tavily_credits": 0,
+        "jina_tokens": 0,
+        "over_budget": false
+      },
+      "duration_s": 4.7,
+      "citation_map": {},
+      "valid_citation_ratio": null,
+      "report_md": "# 研究未能完成\n\n针对问题「What is the latest bugfix (maintenance) release of Python 3.13 listed on docs.python.org as of 2026?」,研究过程发生程序异常。\n\n本说明由程序生成,未经模型撰写,不包含未经核实的研究结论。",
+      "evidences": [],
+      "events": [
+        {
+          "event": "warning",
+          "payload": {
+            "stage": "planner",
+            "detail": "规划失败: 重试耗尽(3 次尝试): HTTP 429: 可重试"
+          }
+        },
+        {
+          "event": "report_delta",
+          "payload": {
+            "md": "# 研究未能完成\n\n针对问题「What is the latest bugfix (maintenance) release of Python 3.13 listed on docs.python.org as of 2026?」,研究过程发生程序异常。\n\n本说明由程序生成,未经模型撰写,不包含未经核实的研究结论。",
+            "draft": true
+          }
+        }
+      ],
+      "eval_time": "2026-09-08T18:07:32",
+      "models": {
+        "daily": "glm-5.3-flash",
+        "high_quality": "glm-5.3",
+        "max_tokens_policy": "必填, 覆盖推理型思考段"
+      },
+      "prompt_version": "phase2-v1",
+      "budget_overrides": {},
+      "required_points": [
+        "给出 3.13 系列最新维护版本号",
+        "给出依据(下载页/whatsnew/Changelog)",
+        "说明结论的时效边界"
+      ],
+      "annotation": null,
+      "safety": null
+    },
+    {
+      "qid": "timely_status",
+      "qtype": "timeliness",
+      "mode": "online",
+      "topic": "In which Python version was PEP 695 type parameter syntax (type statement) introduced, per docs.python.org?",
+      "strategy": "reflect",
+      "task_id": "t_b769dbcfbe46",
+      "report_id": 135,
+      "status": "completed",
+      "stop_reason": "execution_error",
+      "tokens": 0,
+      "credits": 0,
+      "usage": {
+        "llm_tokens": 0,
+        "llm_research_tokens": 0,
+        "llm_writer_tokens": 0,
+        "tavily_credits": 0,
+        "jina_tokens": 0,
+        "over_budget": false
+      },
+      "duration_s": 4.6,
+      "citation_map": {},
+      "valid_citation_ratio": null,
+      "report_md": "# 研究未能完成\n\n针对问题「In which Python version was PEP 695 type parameter syntax (type statement) introduced, per docs.python.org?」,研究过程发生程序异常。\n\n本说明由程序生成,未经模型撰写,不包含未经核实的研究结论。",
+      "evidences": [],
+      "events": [
+        {
+          "event": "warning",
+          "payload": {
+            "stage": "planner",
+            "detail": "规划失败: 重试耗尽(3 次尝试): HTTP 429: 可重试"
+          }
+        },
+        {
+          "event": "report_delta",
+          "payload": {
+            "md": "# 研究未能完成\n\n针对问题「In which Python version was PEP 695 type parameter syntax (type statement) introduced, per docs.python.org?」,研究过程发生程序异常。\n\n本说明由程序生成,未经模型撰写,不包含未经核实的研究结论。",
+            "draft": true
+          }
+        }
+      ],
+      "eval_time": "2026-09-08T18:07:37",
+      "models": {
+        "daily": "glm-5.3-flash",
+        "high_quality": "glm-5.3",
+        "max_tokens_policy": "必填, 覆盖推理型思考段"
+      },
+      "prompt_version": "phase2-v1",
+      "budget_overrides": {},
+      "required_points": [
+        "PEP 695 type 参数语法在 Python 3.12 引入",
+        "给出依据(typing 文档 Changed in version 3.12)",
+        "说明结论的时效边界"
+      ],
+      "annotation": null,
+      "safety": null
+    },
+    {
+      "qid": "noanswer_ml",
+      "qtype": "no_answer",
+      "mode": "online",
+      "topic": "Does docs.python.org document an official Python machine learning library?",
+      "strategy": "reflect",
+      "task_id": "t_d04f32bd5387",
+      "report_id": 136,
+      "status": "completed",
+      "stop_reason": "execution_error",
+      "tokens": 0,
+      "credits": 0,
+      "usage": {
+        "llm_tokens": 0,
+        "llm_research_tokens": 0,
+        "llm_writer_tokens": 0,
+        "tavily_credits": 0,
+        "jina_tokens": 0,
+        "over_budget": false
+      },
+      "duration_s": 4.6,
+      "citation_map": {},
+      "valid_citation_ratio": null,
+      "report_md": "# 研究未能完成\n\n针对问题「Does docs.python.org document an official Python machine learning library?」,研究过程发生程序异常。\n\n本说明由程序生成,未经模型撰写,不包含未经核实的研究结论。",
+      "evidences": [],
+      "events": [
+        {
+          "event": "warning",
+          "payload": {
+            "stage": "planner",
+            "detail": "规划失败: 重试耗尽(3 次尝试): HTTP 429: 可重试"
+          }
+        },
+        {
+          "event": "report_delta",
+          "payload": {
+            "md": "# 研究未能完成\n\n针对问题「Does docs.python.org document an official Python machine learning library?」,研究过程发生程序异常。\n\n本说明由程序生成,未经模型撰写,不包含未经核实的研究结论。",
+            "draft": true
+          }
+        }
+      ],
+      "eval_time": "2026-09-08T18:07:42",
+      "models": {
+        "daily": "glm-5.3-flash",
+        "high_quality": "glm-5.3",
+        "max_tokens_policy": "必填, 覆盖推理型思考段"
+      },
+      "prompt_version": "phase2-v1",
+      "budget_overrides": {},
+      "required_points": [
+        "如实说明 Python 官方标准库不含机器学习库",
+        "不编造不存在的官方库页面"
+      ],
+      "annotation": null,
+      "safety": null
+    }
+  ]
+}

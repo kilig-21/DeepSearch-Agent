@@ -1,0 +1,161 @@
+{
+  "meta": {
+    "artifact": "H1 P3-4 第二轮修复后第三轮双轮标注",
+    "runs": {
+      "pure_web": "run_20260908_180742.json",
+      "adapter": "run_20260908_180841.json"
+    },
+    "annotation_method": "pass1 宽口径（报告全文、quote、point 可见）；pass2 严格 quote-only（隐藏策略标签与 point；否定性、穷尽性、数字类从严）。本轮 8/8 题两组均在 planner 阶段失败，无报告/quote/reader point，因此支持率均为 N/A。",
+    "coverage_method": "按 questions.py 预定义 required_points 标注；covered=1、partial=0.5、not_covered=0；分母为全部 8 题的 22 个必答点。",
+    "acquisition_method": "本轮所有题均无 reading 事件与 reader warning；获取成功率为 N/A。",
+    "note": "标注为零成本复核，不产生新的真实 API 调用。两组均记录 planner HTTP 429，B 未进入 source_adapter/search 阶段。"
+  },
+  "questions": [
+    {
+      "group": "pure_web", "qid": "fact_freethread", "strategy": "reflect",
+      "coverage": [
+        {"point": "自由线程是禁用 GIL 的 CPython 构建模式", "mark": "not_covered"},
+        {"point": "属于实验性特性", "mark": "not_covered"},
+        {"point": "默认构建不启用, 需专用可执行文件/构建选项", "mark": "not_covered"}
+      ],
+      "assertions": [], "assertion_status": "N/A（planner 阶段失败，无报告/证据）"
+    },
+    {
+      "group": "pure_web", "qid": "noanswer_pep", "strategy": "reflect",
+      "coverage": [
+        {"point": "对是否有完整中文翻译给出有据结论", "mark": "not_covered"},
+        {"point": "不编造不存在的翻译页面", "mark": "not_covered"}
+      ],
+      "assertions": [], "assertion_status": "N/A（planner 阶段失败，无报告/证据）"
+    },
+    {
+      "group": "pure_web", "qid": "fact_gil", "strategy": "reflect",
+      "coverage": [
+        {"point": "GIL 的作用: 同一时刻仅一个线程执行 Python 字节码", "mark": "not_covered"},
+        {"point": "Python 3.13 默认构建仍启用 GIL", "mark": "not_covered"},
+        {"point": "自由线程是可选构建/安装选项, 非默认", "mark": "not_covered"}
+      ],
+      "assertions": [], "assertion_status": "N/A（planner 阶段失败，无报告/证据）"
+    },
+    {
+      "group": "pure_web", "qid": "fact_venv", "strategy": "reflect",
+      "coverage": [
+        {"point": "用 python -m venv <目录> 创建虚拟环境", "mark": "not_covered"},
+        {"point": "激活: 各平台对应 activate 脚本", "mark": "not_covered"},
+        {"point": "deactivate 退出虚拟环境", "mark": "not_covered"}
+      ],
+      "assertions": [], "assertion_status": "N/A（planner 阶段失败，无报告/证据）"
+    },
+    {
+      "group": "pure_web", "qid": "compare_logging_print", "strategy": "reflect",
+      "coverage": [
+        {"point": "logging 提供严重级别/格式化/输出目标分离", "mark": "not_covered"},
+        {"point": "logging 适合诊断与生产", "mark": "not_covered"},
+        {"point": "print 用于直接输出展示, 不具备级别与路由能力", "mark": "not_covered"}
+      ],
+      "assertions": [], "assertion_status": "N/A（planner 阶段失败，无报告/证据）"
+    },
+    {
+      "group": "pure_web", "qid": "timely_maint", "strategy": "reflect",
+      "coverage": [
+        {"point": "给出 3.13 系列最新维护版本号", "mark": "not_covered"},
+        {"point": "给出依据", "mark": "not_covered"},
+        {"point": "说明结论的时效边界", "mark": "not_covered"}
+      ],
+      "assertions": [], "assertion_status": "N/A（planner 阶段失败，无报告/证据）"
+    },
+    {
+      "group": "pure_web", "qid": "timely_status", "strategy": "reflect",
+      "coverage": [
+        {"point": "PEP 695 type 参数语法在 Python 3.12 引入", "mark": "not_covered"},
+        {"point": "给出依据(typing 文档 Changed in version 3.12)", "mark": "not_covered"},
+        {"point": "说明结论的时效边界", "mark": "not_covered"}
+      ],
+      "assertions": [], "assertion_status": "N/A（planner 阶段失败，无报告/证据）"
+    },
+    {
+      "group": "pure_web", "qid": "noanswer_ml", "strategy": "reflect",
+      "coverage": [
+        {"point": "如实说明 Python 官方标准库不含机器学习库", "mark": "not_covered"},
+        {"point": "不编造不存在的官方库页面", "mark": "not_covered"}
+      ],
+      "assertions": [], "assertion_status": "N/A（planner 阶段失败，无报告/证据）"
+    },
+    {
+      "group": "adapter", "qid": "fact_freethread", "strategy": "reflect",
+      "coverage": [
+        {"point": "自由线程是禁用 GIL 的 CPython 构建模式", "mark": "not_covered"},
+        {"point": "属于实验性特性", "mark": "not_covered"},
+        {"point": "默认构建不启用, 需专用可执行文件/构建选项", "mark": "not_covered"}
+      ],
+      "assertions": [], "assertion_status": "N/A（planner 阶段失败，无报告/证据）"
+    },
+    {
+      "group": "adapter", "qid": "noanswer_pep", "strategy": "reflect",
+      "coverage": [
+        {"point": "对是否有完整中文翻译给出有据结论", "mark": "not_covered"},
+        {"point": "不编造不存在的翻译页面", "mark": "not_covered"}
+      ],
+      "assertions": [], "assertion_status": "N/A（planner 阶段失败，无报告/证据）"
+    },
+    {
+      "group": "adapter", "qid": "fact_gil", "strategy": "reflect",
+      "coverage": [
+        {"point": "GIL 的作用: 同一时刻仅一个线程执行 Python 字节码", "mark": "not_covered"},
+        {"point": "Python 3.13 默认构建仍启用 GIL", "mark": "not_covered"},
+        {"point": "自由线程是可选构建/安装选项, 非默认", "mark": "not_covered"}
+      ],
+      "assertions": [], "assertion_status": "N/A（planner 阶段失败，无报告/证据）"
+    },
+    {
+      "group": "adapter", "qid": "fact_venv", "strategy": "reflect",
+      "coverage": [
+        {"point": "用 python -m venv <目录> 创建虚拟环境", "mark": "not_covered"},
+        {"point": "激活: 各平台对应 activate 脚本", "mark": "not_covered"},
+        {"point": "deactivate 退出虚拟环境", "mark": "not_covered"}
+      ],
+      "assertions": [], "assertion_status": "N/A（planner 阶段失败，无报告/证据）"
+    },
+    {
+      "group": "adapter", "qid": "compare_logging_print", "strategy": "reflect",
+      "coverage": [
+        {"point": "logging 提供严重级别/格式化/输出目标分离", "mark": "not_covered"},
+        {"point": "logging 适合诊断与生产", "mark": "not_covered"},
+        {"point": "print 用于直接输出展示, 不具备级别与路由能力", "mark": "not_covered"}
+      ],
+      "assertions": [], "assertion_status": "N/A（planner 阶段失败，无报告/证据）"
+    },
+    {
+      "group": "adapter", "qid": "timely_maint", "strategy": "reflect",
+      "coverage": [
+        {"point": "给出 3.13 系列最新维护版本号", "mark": "not_covered"},
+        {"point": "给出依据", "mark": "not_covered"},
+        {"point": "说明结论的时效边界", "mark": "not_covered"}
+      ],
+      "assertions": [], "assertion_status": "N/A（planner 阶段失败，无报告/证据）"
+    },
+    {
+      "group": "adapter", "qid": "timely_status", "strategy": "reflect",
+      "coverage": [
+        {"point": "PEP 695 type 参数语法在 Python 3.12 引入", "mark": "not_covered"},
+        {"point": "给出依据(typing 文档 Changed in version 3.12)", "mark": "not_covered"},
+        {"point": "说明结论的时效边界", "mark": "not_covered"}
+      ],
+      "assertions": [], "assertion_status": "N/A（planner 阶段失败，无报告/证据）"
+    },
+    {
+      "group": "adapter", "qid": "noanswer_ml", "strategy": "reflect",
+      "coverage": [
+        {"point": "如实说明 Python 官方标准库不含机器学习库", "mark": "not_covered"},
+        {"point": "不编造不存在的官方库页面", "mark": "not_covered"}
+      ],
+      "assertions": [], "assertion_status": "N/A（planner 阶段失败，无报告/证据）"
+    }
+  ],
+  "scores": {
+    "pure_web": {"strict_assertion": {"numerator": null, "denominator": 0, "rate": null}, "coverage": {"numerator": 0, "denominator": 22, "rate": 0.0}},
+    "adapter": {"strict_assertion": {"numerator": null, "denominator": 0, "rate": null}, "coverage": {"numerator": 0, "denominator": 22, "rate": 0.0}}
+  },
+  "divergences": [],
+  "failure_reason": "两组 8/8 题均在 planner 阶段记录：规划失败: 重试耗尽(3 次尝试): HTTP 429: 可重试。未进入 search、reading 或 source_adapter 阶段。"
+}

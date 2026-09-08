@@ -93,11 +93,20 @@ class FetchResult:
     final_url: str
     status_code: int
     body: str  # 已按 UTF-8 解码(忽略错误)
+    # 适配器索引为压缩二进制，必须保留经同一 safe_fetch 防线取得的原始字节。
+    # 默认值保持测试中手工构造 FetchResult 的兼容性。
+    body_bytes: bytes | None = None
 
 
 def _postprocess(resp, max_bytes: int) -> FetchResult:
+    # 测试替身和少数简化 client 只提供 text；真实 httpx.Response 总有 content。
+    raw = getattr(resp, "content", None)
+    if raw is None:
+        raw = str(resp.text).encode("utf-8")
+    raw = raw[:max_bytes]
     return FetchResult(final_url=str(resp.url), status_code=resp.status_code,
-                       body=resp.text[:max_bytes])
+                       body=raw.decode("utf-8", errors="ignore"),
+                       body_bytes=raw)
 
 
 def safe_fetch(

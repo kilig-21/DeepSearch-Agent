@@ -34,13 +34,22 @@ def persist_task_results(engine, task_id: str, state: dict, budget: Budget | Non
     usage = budget.usage_snapshot() if budget else {
         "llm_tokens": 0, "llm_research_tokens": 0, "llm_writer_tokens": 0,
         "tavily_credits": 0, "jina_tokens": 0}
+    adapter_indices = [r["adapter"] for r in state.get("search_rounds", [])
+                       if r.get("adapter") is not None]
+    adapter_fallbacks = list(state.get("source_adapter_fallbacks", []))
     return db.complete_task_with_report(
         engine, task_id,
         final_md=state.get("report_md", ""),
         citation_map=state.get("citation_map", {}),
         stop_reason=state.get("stop_reason") or "single_pass",
         config_json={"allowed_domains": sorted(allowed_domains),
-                     "proxy": proxy},
+                     "proxy": proxy,
+                     # 索引版本与哈希随任务配置入库，供 H1 复现与归因；Web
+                     # 回落轮为 None，不伪装成适配器命中。
+                     "source_adapter_indices": adapter_indices,
+                     # 同时持久化回落原因；否则 SSE 缓冲过期后无法区分“未启用”
+                     # 与“索引失败后已走纯 Web”。
+                     "source_adapter_fallbacks": adapter_fallbacks},
         token_cost=usage["llm_tokens"],
         credits_cost=usage["tavily_credits"],
         duration_s=state.get("duration_s", 0.0),

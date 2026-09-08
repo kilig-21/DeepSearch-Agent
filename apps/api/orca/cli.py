@@ -20,6 +20,7 @@ from .config import (
     BUDGET_WRITER_RESERVE_TOKENS,
     DB_PATH,
     FETCH_PROXY,
+    SOURCE_ADAPTER,
 )
 from .events import console_emit
 from .graph import GraphTools, run_research
@@ -42,6 +43,7 @@ def default_tools_builder(budget: Budget) -> GraphTools:
     from .extract import fetch_and_extract_async
     from .llm import LLMClient
     from .search import TavilySearch
+    from .adapters import PythonZhDocsAdapter
 
     llm = LLMClient()
     tavily = TavilySearch()
@@ -54,11 +56,16 @@ def default_tools_builder(budget: Budget) -> GraphTools:
             url, allowed_domains=allowed_domains or ALLOWED_DOMAINS,
             proxy=proxy or FETCH_PROXY)
 
+    if SOURCE_ADAPTER not in {"", "python_zh_docs"}:
+        raise ValueError(f"未知 ORCA_SOURCE_ADAPTER: {SOURCE_ADAPTER}")
+    adapter = PythonZhDocsAdapter() if SOURCE_ADAPTER == "python_zh_docs" else None
+
     return GraphTools(
         llm_chat=llm.chat, llm_chat_stream=llm.chat_stream,
         search_fn=search_fn, fetch_async=fetch_async,
         budget=budget, emit=console_emit,
         allowed_domains=set(ALLOWED_DOMAINS), proxy=FETCH_PROXY,
+        source_adapter=adapter,
     )
 
 

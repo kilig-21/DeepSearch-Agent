@@ -21,6 +21,7 @@ from urllib.parse import urlparse
 from langgraph.graph import END, START, StateGraph
 
 from .budget import Budget, MIN_USABLE_OUTPUT, PROMPT_MARGIN
+from .adapters import AdapterUnavailable, PythonZhDocsAdapter
 from .citations import check_report, degrade_citations, revise_report
 from .llm import LLMError
 from .evidence import CandidateEvidence, locate_quote, source_type_for_domain
@@ -60,6 +61,7 @@ class ResearchState(TypedDict):
     pending_links: list[SearchResult]    # 集合外待核实链接(不抓)
     seen_urls: list[str]                 # 跨轮已见 URL(循环不重复抓取)
     search_rounds: list[dict]
+    source_adapter_fallbacks: list[dict]  # 任务完成后仍可审计的回落轨迹
     candidate_evidence: list[CandidateEvidence]
     evidence: list[CandidateEvidence]    # merger 整体写回(§3.1)
     last_added_count: int                # 本轮 merger 新增证据数(§3.5 判定用)
@@ -85,6 +87,9 @@ class GraphTools:
     reflect: bool = True        # Phase 2 反思循环开关(§3.2);False=单轮对比模式
     max_rounds: int = 3         # 轮次上限(§3.1)
     events: list = field(default_factory=list)  # 仅供工具调试
+    # Phase 3: 启用时仅由本地 objects.inv/searchindex 定向发现候选；不可用
+    # 时 searcher 发 warning 后明确回落 search_fn（纯 Web）。
+    source_adapter: PythonZhDocsAdapter | None = None
 
 
 def _control_stop(state: ResearchState, budget: Budget) -> str | None:
@@ -167,20 +172,46 @@ def make_searcher(tools: GraphTools):
         stop = _control_stop(state, tools.budget)
         if stop:
             return {"stop_reason": stop}
-        if tools.budget.research_exhausted():
-            return {"stop_reason": "budget_exhausted"}
-        if not tools.budget.charge_credits(1):  # 预占 1 credit, 失败不出手
-            return {"stop_reason": "budget_exhausted"}
-
         # 反思循环轮次消费 reflector 产出的查询(§3.2);首轮用 planner 查询
         nq = state.get("next_queries") or []
         query = nq[0] if nq else (state.get("planned_query") or state["topic"])
-        try:
-            results, credits = tools.search_fn(query, limit=8)
-        except Exception as e:  # noqa: BLE001
-            tools.emit("warning", {"stage": "searcher",
-                                   "detail": f"搜索失败: {e}"})
-            return {"stop_reason": "no_new_evidence"}
+        adapter_metadata: dict[str, str] | None = None
+        fallbacks: list[dict] | None = None
+        if tools.source_adapter is not None:
+            try:
+                adapter_out = tools.source_adapter.search(query, limit=8)
+                results, credits = adapter_out.results, 0
+                adapter_metadata = adapter_out.metadata
+            except AdapterUnavailable as e:
+                fallbacks = list(state.get("source_adapter_fallbacks", [])) + [{
+                    "round_no": state["round_no"], "query": query,
+                    "adapter": "python_zh_docs", "fallback": "pure_web",
+                    "reason": str(e),
+                }]
+                tools.emit("warning", {
+                    "stage": "source_adapter",
+                    "detail": f"Python 中文文档适配器不可用: {e}; 已回落纯 Web 搜索",
+                    "fallback": "pure_web",
+                })
+                if tools.budget.research_exhausted() or not tools.budget.charge_credits(1):
+                    return {"stop_reason": "budget_exhausted",
+                            "source_adapter_fallbacks": fallbacks}
+                try:
+                    results, credits = tools.search_fn(query, limit=8)
+                except Exception as web_error:  # noqa: BLE001
+                    tools.emit("warning", {"stage": "searcher",
+                                           "detail": f"搜索失败: {web_error}"})
+                    return {"stop_reason": "no_new_evidence",
+                            "source_adapter_fallbacks": fallbacks}
+        else:
+            if tools.budget.research_exhausted() or not tools.budget.charge_credits(1):
+                return {"stop_reason": "budget_exhausted"}
+            try:
+                results, credits = tools.search_fn(query, limit=8)
+            except Exception as e:  # noqa: BLE001
+                tools.emit("warning", {"stage": "searcher",
+                                       "detail": f"搜索失败: {e}"})
+                return {"stop_reason": "no_new_evidence"}
 
         # 循环模式跨轮去重(§3.2):仅本轮新发现的 URL 喂 reader——已抓页
         # 不重复抓取/摘要(控制 token);事件与轮记录只展示本轮结果
@@ -188,16 +219,26 @@ def make_searcher(tools: GraphTools):
         fresh = [r for r in results if r.url not in seen]
         seen.update(r.url for r in results)
         allowed, outside = split_by_allowlist(fresh, tools.allowed_domains)
-        tools.emit("search", {"round": state["round_no"], "query": query,
-                              "results": [{"url": r.url, "title": r.title}
-                                          for r in dedup(results)],
-                              "credits_used": credits})
-        rounds = list(state.get("search_rounds", [])) + [{
-            "round_no": state["round_no"], "query": query,
-            "result_count": len(dedup(results)), "credits_used": credits}]
+        search_payload = {"round": state["round_no"], "query": query,
+                          "results": [{"url": r.url, "title": r.title}
+                                      for r in dedup(results)],
+                          "credits_used": credits}
+        round_record = {"round_no": state["round_no"], "query": query,
+                        "result_count": len(dedup(results)),
+                        "credits_used": credits}
+        # 不启用适配器与回落纯 Web 保持既有事件/落库形状；只有真实适配器
+        # 命中才附带可复现实验元数据，避免把回落伪装成适配器结果。
+        if adapter_metadata is not None:
+            search_payload["adapter"] = adapter_metadata
+            round_record["adapter"] = adapter_metadata
+        tools.emit("search", search_payload)
+        rounds = list(state.get("search_rounds", [])) + [round_record]
         pending = list(state.get("pending_links", [])) + outside
-        return {"search_results": allowed, "pending_links": dedup(pending),
-                "search_rounds": rounds, "seen_urls": sorted(seen)}
+        out = {"search_results": allowed, "pending_links": dedup(pending),
+               "search_rounds": rounds, "seen_urls": sorted(seen)}
+        if fallbacks is not None:
+            out["source_adapter_fallbacks"] = fallbacks
+        return out
     return searcher
 
 
@@ -599,7 +640,8 @@ async def run_research(tools: GraphTools, topic: str, *, task_id: str) -> dict:
     init: ResearchState = {
         "topic": topic, "task_id": task_id, "sub_questions": [],
         "planned_query": "", "search_results": [], "pending_links": [],
-        "seen_urls": [], "search_rounds": [], "candidate_evidence": [],
+        "seen_urls": [], "search_rounds": [], "source_adapter_fallbacks": [],
+        "candidate_evidence": [],
         "evidence": [],
         "last_added_count": 0, "next_queries": [],
         "round_no": 1, "stop_reason": None, "report_md": "",

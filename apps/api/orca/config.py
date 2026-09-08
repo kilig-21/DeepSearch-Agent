@@ -30,6 +30,10 @@ ALLOWED_DOMAINS = {"docs.python.org", "developer.mozilla.org",
 # (代理模式下由代理方解析目标, 本地 IP 校验不适用, 依赖白名单防线)
 FETCH_PROXY = os.environ.get("FETCH_PROXY") or None
 
+# Phase 3：默认关闭，避免既有应用链路隐式改变。H1 对照/显式使用时只接受
+# 已预登记的中文 Python 文档适配器，其他值在组装时拒绝。
+SOURCE_ADAPTER = os.environ.get("ORCA_SOURCE_ADAPTER", "").strip()
+
 # 预算初始值(§3.6, Phase 0 实测回填; Phase 1A 实测后校准)。
 # 支持环境变量覆盖(ORCA_* 前缀), 供演示/评测构造小预算, 默认值不变。
 BUDGET_TOTAL_LLM_TOKENS = int(os.environ.get("ORCA_BUDGET_TOTAL_LLM_TOKENS", 50_000))

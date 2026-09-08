@@ -1,0 +1,207 @@
+{
+  "meta": {
+    "artifact": "H1 P3-4 第四轮双轮标注",
+    "runs": {"pure_web": "run_20260908_184204.json", "adapter": "run_20260908_190521.json"},
+    "annotation_method": "pass1 宽口径（报告全文、quote、reader point 可见）；pass2 严格 quote-only（隐藏策略标签与 point；否定性、穷尽性、数字类从严）。最终比较只用 pass2。",
+    "coverage_method": "按 questions.py 预定义 required_points 标注；covered=1、partial=0.5、not_covered=0；分母为全部 8 题的 22 个必答点。",
+    "acquisition_method": "reading / (reading + reader warning)；无 reading 且无 reader warning 为 N/A。证据命中数为结果行 evidences 数组长度。",
+    "note": "标注为零成本复核，不产生新的真实 API 调用。"
+  },
+  "questions": [
+    {
+      "group": "pure_web", "qid": "fact_freethread", "strategy": "reflect",
+      "coverage": [
+        {"point": "自由线程是禁用 GIL 的 CPython 构建模式", "mark": "covered"},
+        {"point": "属于实验性特性", "mark": "not_covered"},
+        {"point": "默认构建不启用, 需专用可执行文件/构建选项", "mark": "partial"}
+      ],
+      "assertions": [
+        {"text": "自由线程是禁用 GIL 的 CPython 构建并允许线程并行", "evidence_ids": ["ev_001"], "pass1": "support", "pass2": "support"},
+        {"text": "Python 3.13 的自由线程构建不是默认启用", "evidence_ids": ["ev_002"], "pass1": "support", "pass2": "partial"},
+        {"text": "从源码构建需使用 --disable-gil", "evidence_ids": [], "pass1": "not_support", "pass2": "not_support"}
+      ]
+    },
+    {
+      "group": "pure_web", "qid": "noanswer_pep", "strategy": "reflect",
+      "coverage": [
+        {"point": "对是否有完整中文翻译给出有据结论", "mark": "not_covered"},
+        {"point": "不编造不存在的翻译页面", "mark": "not_covered"}
+      ],
+      "assertions": [], "assertion_status": "N/A（无可核实证据，报告未形成新结论）"
+    },
+    {
+      "group": "pure_web", "qid": "fact_gil", "strategy": "reflect",
+      "coverage": [
+        {"point": "GIL 的作用: 同一时刻仅一个线程执行 Python 字节码", "mark": "not_covered"},
+        {"point": "Python 3.13 默认构建仍启用 GIL", "mark": "not_covered"},
+        {"point": "自由线程是可选构建/安装选项, 非默认", "mark": "not_covered"}
+      ],
+      "assertions": [], "assertion_status": "N/A（无可核实证据，报告未形成新结论）"
+    },
+    {
+      "group": "pure_web", "qid": "fact_venv", "strategy": "reflect",
+      "coverage": [
+        {"point": "用 python -m venv <目录> 创建虚拟环境", "mark": "not_covered"},
+        {"point": "激活: 各平台对应 activate 脚本(Windows/Unix 不同)", "mark": "not_covered"},
+        {"point": "deactivate 退出虚拟环境", "mark": "not_covered"}
+      ],
+      "assertions": [], "assertion_status": "N/A（planner 阶段失败，无报告/证据）"
+    },
+    {
+      "group": "pure_web", "qid": "compare_logging_print", "strategy": "reflect",
+      "coverage": [
+        {"point": "logging 提供严重级别/格式化/输出目标分离", "mark": "not_covered"},
+        {"point": "logging 适合诊断与生产(可按级别开关, 不改代码)", "mark": "not_covered"},
+        {"point": "print 用于直接输出展示, 不具备级别与路由能力", "mark": "not_covered"}
+      ],
+      "assertions": [], "assertion_status": "N/A（planner 阶段失败，无报告/证据）"
+    },
+    {
+      "group": "pure_web", "qid": "timely_maint", "strategy": "reflect",
+      "coverage": [
+        {"point": "给出 3.13 系列最新维护版本号", "mark": "not_covered"},
+        {"point": "给出依据(下载页/whatsnew/Changelog)", "mark": "covered"},
+        {"point": "说明结论的时效边界", "mark": "covered"}
+      ],
+      "assertions": [
+        {"text": "现有页面未给出具体 3.13.x 最新维护版本号", "evidence_ids": ["ev_001", "ev_003"], "pass1": "support", "pass2": "partial"},
+        {"text": "Python 3.13 于 2024 年 10 月 7 日发布", "evidence_ids": ["ev_001"], "pass1": "support", "pass2": "support"},
+        {"text": "3.13 的完整 bugfix 支持期为两年", "evidence_ids": ["ev_002"], "pass1": "support", "pass2": "support"},
+        {"text": "PEP 719 是 3.13 发布计划参考", "evidence_ids": ["ev_003"], "pass1": "support", "pass2": "support"}
+      ]
+    },
+    {
+      "group": "pure_web", "qid": "timely_status", "strategy": "reflect",
+      "coverage": [
+        {"point": "PEP 695 type 参数语法在 Python 3.12 引入", "mark": "covered"},
+        {"point": "给出依据(typing 文档 Changed in version 3.12)", "mark": "covered"},
+        {"point": "说明结论的时效边界", "mark": "partial"}
+      ],
+      "assertions": [
+        {"text": "type statement 在 Python 3.12 新增", "evidence_ids": ["ev_001"], "pass1": "support", "pass2": "support"},
+        {"text": "泛型语法支持在 Python 3.12 新增", "evidence_ids": ["ev_002"], "pass1": "support", "pass2": "support"},
+        {"text": "当前引用页面为 Python 3.14.7 文档", "evidence_ids": ["ev_004"], "pass1": "support", "pass2": "support"}
+      ]
+    },
+    {
+      "group": "pure_web", "qid": "noanswer_ml", "strategy": "reflect",
+      "coverage": [
+        {"point": "如实说明 Python 官方标准库不含机器学习库", "mark": "partial"},
+        {"point": "不编造不存在的官方库页面", "mark": "covered"}
+      ],
+      "assertions": [
+        {"text": "docs.python.org 主要涵盖教程、标准库和语言参考", "evidence_ids": ["ev_001", "ev_003"], "pass1": "support", "pass2": "support"},
+        {"text": "标准库目录明确没有机器学习模块", "evidence_ids": ["ev_006", "ev_007"], "pass1": "support", "pass2": "not_support"},
+        {"text": "第三方模块以网站上的链接/指针形式出现", "evidence_ids": ["ev_002", "ev_004"], "pass1": "support", "pass2": "support"},
+        {"text": "docs.python.org 不收录官方 Python 机器学习库", "evidence_ids": ["ev_001", "ev_006"], "pass1": "support", "pass2": "partial"}
+      ]
+    },
+    {
+      "group": "adapter", "qid": "fact_freethread", "strategy": "reflect",
+      "coverage": [
+        {"point": "自由线程是禁用 GIL 的 CPython 构建模式", "mark": "covered"},
+        {"point": "属于实验性特性", "mark": "partial"},
+        {"point": "默认构建不启用, 需专用可执行文件/构建选项", "mark": "covered"}
+      ],
+      "assertions": [
+        {"text": "自由线程构建通过 --disable-gil 和 -X gil=0 禁用 GIL", "evidence_ids": ["ev_004"], "pass1": "support", "pass2": "support"},
+        {"text": "自由线程属于实验性支持", "evidence_ids": [], "pass1": "partial", "pass2": "not_support"},
+        {"text": "自由线程构建不是默认构建，需特定配置或 t 后缀分发", "evidence_ids": ["ev_005", "ev_007"], "pass1": "support", "pass2": "support"},
+        {"text": "Windows 可安装带 t 后缀的自由线程构建", "evidence_ids": ["ev_007", "ev_008"], "pass1": "support", "pass2": "support"}
+      ]
+    },
+    {
+      "group": "adapter", "qid": "noanswer_pep", "strategy": "reflect",
+      "coverage": [
+        {"point": "对是否有完整中文翻译给出有据结论", "mark": "covered"},
+        {"point": "不编造不存在的翻译页面", "mark": "covered"}
+      ],
+      "assertions": [
+        {"text": "中文文档存在 PEP 695 类型形参语法相关章节", "evidence_ids": ["ev_004", "ev_005"], "pass1": "support", "pass2": "support"},
+        {"text": "现有证据不能证明 PEP 695 全文已有完整中文翻译", "evidence_ids": ["ev_002", "ev_003", "ev_006"], "pass1": "support", "pass2": "support"}
+      ]
+    },
+    {
+      "group": "adapter", "qid": "fact_gil", "strategy": "reflect",
+      "coverage": [
+        {"point": "GIL 的作用: 同一时刻仅一个线程执行 Python 字节码", "mark": "partial"},
+        {"point": "Python 3.13 默认构建仍启用 GIL", "mark": "covered"},
+        {"point": "自由线程是可选构建/安装选项, 非默认", "mark": "covered"}
+      ],
+      "assertions": [
+        {"text": "Python 存在自由线程构建并通过 -X gil=0 禁用 GIL", "evidence_ids": ["ev_001", "ev_004"], "pass1": "support", "pass2": "partial"},
+        {"text": "Python 3.13 并未默认移除 GIL", "evidence_ids": ["ev_004", "ev_007"], "pass1": "support", "pass2": "support"},
+        {"text": "自由线程需要 --disable-gil 构建或 t 后缀独立分发", "evidence_ids": ["ev_004", "ev_007"], "pass1": "support", "pass2": "support"},
+        {"text": "自由线程构建存在运行时兼容性限制", "evidence_ids": ["ev_005", "ev_006"], "pass1": "support", "pass2": "support"}
+      ]
+    },
+    {
+      "group": "adapter", "qid": "fact_venv", "strategy": "reflect",
+      "coverage": [
+        {"point": "用 python -m venv <目录> 创建虚拟环境", "mark": "covered"},
+        {"point": "激活: 各平台对应 activate 脚本(Windows/Unix 不同)", "mark": "partial"},
+        {"point": "deactivate 退出虚拟环境", "mark": "not_covered"}
+      ],
+      "assertions": [
+        {"text": "创建虚拟环境的命令是 python -m venv <env path>", "evidence_ids": ["ev_004", "ev_005"], "pass1": "support", "pass2": "support"},
+        {"text": "Windows 激活虚拟环境使用 <env>\\Scripts\\Activate", "evidence_ids": ["ev_004"], "pass1": "support", "pass2": "support"},
+        {"text": "证据覆盖 Windows 与 Unix/macOS 两套激活脚本", "evidence_ids": [], "pass1": "not_support", "pass2": "not_support"},
+        {"text": "使用 deactivate 退出虚拟环境", "evidence_ids": [], "pass1": "not_support", "pass2": "not_support"}
+      ]
+    },
+    {
+      "group": "adapter", "qid": "compare_logging_print", "strategy": "reflect",
+      "coverage": [
+        {"point": "logging 提供严重级别/格式化/输出目标分离", "mark": "not_covered"},
+        {"point": "logging 适合诊断与生产(可按级别开关, 不改代码)", "mark": "not_covered"},
+        {"point": "print 用于直接输出展示, 不具备级别与路由能力", "mark": "not_covered"}
+      ],
+      "assertions": [], "assertion_status": "N/A（证据与主题不匹配，未形成可核实结论）"
+    },
+    {
+      "group": "adapter", "qid": "timely_maint", "strategy": "reflect",
+      "coverage": [
+        {"point": "给出 3.13 系列最新维护版本号", "mark": "not_covered"},
+        {"point": "给出依据(下载页/whatsnew/Changelog)", "mark": "partial"},
+        {"point": "说明结论的时效边界", "mark": "not_covered"}
+      ],
+      "assertions": [
+        {"text": "当前证据不能给出具体 3.13.x 最新维护版本号", "evidence_ids": ["ev_001", "ev_003", "ev_007"], "pass1": "support", "pass2": "partial"},
+        {"text": "更新日志和版本页面是可用的官方依据来源", "evidence_ids": ["ev_001", "ev_002"], "pass1": "support", "pass2": "partial"},
+        {"text": "当前证据给出了截至本次运行的明确时效边界", "evidence_ids": [], "pass1": "not_support", "pass2": "not_support"}
+      ]
+    },
+    {
+      "group": "adapter", "qid": "timely_status", "strategy": "reflect",
+      "coverage": [
+        {"point": "PEP 695 type 参数语法在 Python 3.12 引入", "mark": "partial"},
+        {"point": "给出依据(typing 文档 Changed in version 3.12)", "mark": "not_covered"},
+        {"point": "说明结论的时效边界", "mark": "not_covered"}
+      ],
+      "assertions": [
+        {"text": "当前语法规范包含 PEP 695 的 type_alias 与 type_params 规则", "evidence_ids": ["ev_007", "ev_008", "ev_009"], "pass1": "support", "pass2": "support"},
+        {"text": "PEP 695 type 参数语法在 Python 3.12 引入", "evidence_ids": ["ev_010", "ev_011", "ev_012"], "pass1": "support", "pass2": "partial"},
+        {"text": "引用证据给出了完整的当前版本时效边界", "evidence_ids": [], "pass1": "not_support", "pass2": "not_support"}
+      ]
+    },
+    {
+      "group": "adapter", "qid": "noanswer_ml", "strategy": "reflect",
+      "coverage": [
+        {"point": "如实说明 Python 官方标准库不含机器学习库", "mark": "not_covered"},
+        {"point": "不编造不存在的官方库页面", "mark": "not_covered"}
+      ],
+      "assertions": [], "assertion_status": "N/A（planner 阶段 HTTP 429，无报告/证据）"
+    }
+  ],
+  "scores": {
+    "pure_web": {"strict_assertion": {"numerator": 10.5, "denominator": 14, "rate": 0.75}, "coverage": {"numerator": 7.5, "denominator": 22, "rate": 0.3409}},
+    "adapter": {"strict_assertion": {"numerator": 13.0, "denominator": 20, "rate": 0.65}, "coverage": {"numerator": 9.5, "denominator": 22, "rate": 0.4318}}
+  },
+  "divergences": [
+    {"qid": "fact_freethread", "group": "adapter", "items": ["适配器返回了自由线程构建、-X gil 与 Windows t 后缀分发的直接中文文档 quote；‘实验性’并无直接 quote，pass2 不计。"]},
+    {"qid": "timely_maint", "group": "both", "items": ["两组都没有具体 3.13.x 版本号；否定性/穷尽性表述按 pass2 从严。"]},
+    {"qid": "timely_status", "group": "adapter", "items": ["语法规范直接支持 type_alias/type_params，但当前运行证据未直接给出 Changed in version 3.12 quote，版本引入断言降为 partial。"]},
+    {"qid": "fact_venv", "group": "adapter", "items": ["适配器证据直接覆盖 Windows 创建与激活，未覆盖 Unix/macOS 激活和 deactivate。"]},
+    {"qid": "noanswer_ml", "group": "pure_web", "items": ["标准库目录的‘没有机器学习模块’属于否定性穷尽断言，quote-only 不接受目录片段作为完整证明。"]}
+  ]
+}

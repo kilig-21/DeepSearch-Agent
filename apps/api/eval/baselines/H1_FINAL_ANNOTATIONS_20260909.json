@@ -1,0 +1,15 @@
+{
+  "meta": {"artifact":"H1 final two-pass annotations","pure_web":"run_20260908_205824.json","adapter":"run_20260909_000658.json","method":"pass1 uses report+quote+reader point; pass2 is quote-only, ignores reader point and is strict on negative/exhaustive/numeric claims. Final comparisons use pass2 only.","failure_rule":"B/noanswer_pep is execution_error after adapter hits exhausted the per-task LLM budget; strict support=N/A, coverage=0, retained in 8-task denominators."},
+  "questions": [
+    {"qid":"fact_freethread","A":{"coverage":["covered","not_covered","covered"],"pass1":"5/5","pass2":"5/5"},"B":{"coverage":["covered","not_covered","covered"],"pass1":"4/4","pass2":"4/4"}},
+    {"qid":"noanswer_pep","A":{"coverage":["covered","covered"],"pass1":"1/1","pass2":"0.5/1"},"B":{"coverage":["not_covered","not_covered"],"pass1":"N/A","pass2":"N/A","status":"execution_error; writer output absent after per-task LLM budget exhaustion"}},
+    {"qid":"fact_gil","A":{"coverage":["not_covered","not_covered","not_covered"],"pass1":"N/A","pass2":"N/A"},"B":{"coverage":["partial","covered","covered"],"pass1":"4/4","pass2":"3.5/4"}},
+    {"qid":"fact_venv","A":{"coverage":["not_covered","not_covered","not_covered"],"pass1":"N/A","pass2":"N/A"},"B":{"coverage":["covered","partial","not_covered"],"pass1":"3/3","pass2":"3/3"}},
+    {"qid":"compare_logging_print","A":{"coverage":["covered","covered","covered"],"pass1":"5/5","pass2":"4.5/5"},"B":{"coverage":["not_covered","not_covered","not_covered"],"pass1":"N/A","pass2":"N/A"}},
+    {"qid":"timely_maint","A":{"coverage":["covered","covered","covered"],"pass1":"4/4","pass2":"2.5/4"},"B":{"coverage":["not_covered","partial","partial"],"pass1":"4/4","pass2":"3/4"}},
+    {"qid":"timely_status","A":{"coverage":["covered","covered","covered"],"pass1":"3/3","pass2":"3/3"},"B":{"coverage":["not_covered","not_covered","not_covered"],"pass1":"N/A","pass2":"N/A"}},
+    {"qid":"noanswer_ml","A":{"coverage":["partial","covered"],"pass1":"4/4","pass2":"2.5/4"},"B":{"coverage":["partial","covered"],"pass1":"5/5","pass2":"2.5/5"}}
+  ],
+  "scores":{"pure_web":{"strict_assertion":{"numerator":17.5,"denominator":22,"rate":0.7955},"coverage":{"numerator":15,"denominator":22,"rate":0.6818}},"adapter":{"strict_assertion":{"numerator":16,"denominator":21,"rate":0.7619},"coverage":{"numerator":8.5,"denominator":22,"rate":0.3864}}},
+  "divergences":["A/noanswer_pep: pass1 accepts the report's document-level conclusion; pass2 downgrades it because its quote evidence does not exhaustively prove site-wide absence.","A/compare_logging_print: pass2 downgrades the print limitation comparison because it is partly synthesized rather than a direct quote.","A/timely_maint: 'latest' is inferred from a version label, so pass2 discounts it.","B/noanswer_ml: absence of ML across sampled standard-library pages is not exhaustive proof; pass2 is strict.","B/noanswer_pep: no pass2 score because writer emitted no report after budget exhaustion."]
+}

@@ -73,6 +73,26 @@ def test_python_zh_adapter_uses_local_sphinx_indices_without_web_search():
     assert len(outcome.metadata["searchindex_sha256"]) == 64
 
 
+def test_python_zh_adapter_survives_objects_inv_payload_with_raw_carriage_return():
+    """真实规模 objects.inv 的压缩流几乎必然含裸 \r 字节；
+    _inventory_entries 不能用 splitlines()+join 破坏二进制流。
+    """
+    entries_text = "\n".join(
+        f"symbol_{i}.attr py:attribute 1 library/mod_{i}.html#symbol_{i} -"
+        for i in range(400)
+    )
+    header = (b"# Sphinx inventory version 2\n# Project: Python\n"
+              b"# Version: 3.14.7\n# The remainder of this file is compressed\n")
+    compressed = zlib.compress(entries_text.encode())
+    assert b"\r" in compressed, "测试夹具未触发裸 \\r 场景, 需调整合成数据规模"
+    raw = header + compressed
+    fetch, _calls = _offline_fetcher(inventory=raw)
+    adapter = PythonZhDocsAdapter(fetch_index=fetch, min_interval_s=0)
+    outcome = adapter.search("symbol_7", limit=5)
+    assert outcome.results
+    assert any("mod_7.html" in r.url for r in outcome.results)
+
+
 @pytest.mark.parametrize(
     ("inventory", "searchindex", "error"),
     [

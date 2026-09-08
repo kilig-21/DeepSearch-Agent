@@ -47,13 +47,18 @@ def _query_tokens(query: str) -> set[str]:
 
 def _inventory_entries(raw: bytes) -> tuple[str, str, dict[str, str]]:
     """解析 Sphinx inventory v2；只保留对象名到相对 URI 的确定映射。"""
-    lines = raw.splitlines()
-    if len(lines) < 5 or not lines[0].startswith(b"# Sphinx inventory version 2"):
+    header_end = -1
+    for _ in range(4):
+        header_end = raw.find(b"\n", header_end + 1)
+        if header_end == -1:
+            raise AdapterUnavailable("objects.inv 缺失或不是 Sphinx inventory v2")
+    header_lines = raw[:header_end].split(b"\n")
+    if not header_lines[0].startswith(b"# Sphinx inventory version 2"):
         raise AdapterUnavailable("objects.inv 缺失或不是 Sphinx inventory v2")
     try:
-        project = lines[1].decode("utf-8").split(":", 1)[1].strip()
-        version = lines[2].decode("utf-8").split(":", 1)[1].strip()
-        payload = zlib.decompress(b"\n".join(lines[4:])).decode("utf-8")
+        project = header_lines[1].decode("utf-8").split(":", 1)[1].strip()
+        version = header_lines[2].decode("utf-8").split(":", 1)[1].strip()
+        payload = zlib.decompress(raw[header_end + 1:]).decode("utf-8")
     except (UnicodeDecodeError, ValueError, zlib.error) as e:
         raise AdapterUnavailable(f"objects.inv 损坏: {type(e).__name__}") from e
 

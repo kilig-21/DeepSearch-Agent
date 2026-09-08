@@ -93,6 +93,37 @@ def test_python_zh_adapter_survives_objects_inv_payload_with_raw_carriage_return
     assert any("mod_7.html" in r.url for r in outcome.results)
 
 
+def test_python_zh_adapter_index_max_bytes_exceeds_default_page_cap():
+    """searchindex.js 实测约4.8MB, 超过 fetch.py 默认2MB页面抓取上限；
+    适配器必须显式放宽索引抓取的 max_bytes, 不能依赖默认值。
+    """
+    from orca.fetch import MAX_BODY_BYTES
+
+    assert PythonZhDocsAdapter.INDEX_MAX_BYTES > MAX_BODY_BYTES
+
+    captured = {}
+
+    def fetch_with_cap_check(url: str) -> FetchResult:
+        if url.endswith("searchindex.js"):
+            prefix = b"Search.setIndex("
+            value = json.loads(_searchindex()[len(prefix):-2])
+            value["_pad"] = "x" * 3_000_000
+            raw = (prefix + json.dumps(value, ensure_ascii=False).encode()
+                   + b");")
+            captured["searchindex_len"] = len(raw)
+            return FetchResult(url, 200, raw.decode("utf-8", "ignore"), raw)
+        raw = _inventory()
+        return FetchResult(url, 200, raw.decode("utf-8", "ignore"), raw)
+
+    adapter = PythonZhDocsAdapter(fetch_index=fetch_with_cap_check,
+                                  min_interval_s=0)
+    outcome = adapter.search("venv")
+
+    assert captured["searchindex_len"] > MAX_BODY_BYTES
+    assert captured["searchindex_len"] < PythonZhDocsAdapter.INDEX_MAX_BYTES
+    assert outcome.results
+
+
 @pytest.mark.parametrize(
     ("inventory", "searchindex", "error"),
     [

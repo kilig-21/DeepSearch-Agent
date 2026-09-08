@@ -103,6 +103,11 @@ class PythonZhDocsAdapter:
     取原始字节，且强制 host 与 ``/zh-cn/`` 前缀，防止索引重定向放宽边界。
     """
 
+    # searchindex.js 解压后约4.8MB(2026-09-08 实测), 超过 safe_fetch 默认
+    # 2MB 上限(该上限是为正文抓取设计的通用防线); 索引来自白名单域名的
+    # 版本化文件, 单独放宽到8MB, 不改 fetch.py 默认值/正文抓取路径。
+    INDEX_MAX_BYTES = 8_000_000
+
     def __init__(self, *, root: str = PYTHON_ZH_ROOT,
                  fetch_index: Callable[[str], FetchResult] | None = None,
                  min_interval_s: float = 0.2,
@@ -123,7 +128,8 @@ class PythonZhDocsAdapter:
         self._loaded: tuple[dict[str, str], dict, dict[str, str]] | None = None
 
     def _safe_fetch_index(self, url: str) -> FetchResult:
-        return safe_fetch(url, allowed_domains={PYTHON_ZH_HOST})
+        return safe_fetch(url, allowed_domains={PYTHON_ZH_HOST},
+                          max_bytes=self.INDEX_MAX_BYTES)
 
     def _read_index(self, name: str) -> bytes:
         url = urljoin(self.root, name)

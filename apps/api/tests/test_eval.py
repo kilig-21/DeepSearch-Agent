@@ -420,10 +420,11 @@ def test_main_meta_records_resolved_budget_and_guard_snapshot(tmp_path):
 # ---- R6 守门: 基线快照预算逐行核验 ------------------------------------------
 
 def _latest_baseline_run() -> dict:
-    """baselines 下最新的守门对象(排除补跑 supplement 产物)。
+    """baselines 下最新的全量守门对象(排除 supplement 与 --only 子集实验)。
 
-    按修改时间取最新;守门对象须为 45 行全量(合并产物 run_merged_* 或
-    --compare 全量 run), 行数由 test_latest_baseline_full_coverage 断言。
+    按修改时间倒序取最新;守门对象须为全量产物(meta.only_qids is None),
+    行数由 test_latest_baseline_full_coverage 断言。H1 等 --only 子集
+    对照实验的产物不是全量基线, 不参与守门。
     """
     import json
     from pathlib import Path
@@ -431,9 +432,13 @@ def _latest_baseline_run() -> dict:
     base = Path(__file__).resolve().parents[1] / "eval" / "baselines"
     runs = sorted((p for p in base.glob("run_*.json")
                    if "supplement" not in p.name),
-                  key=lambda p: p.stat().st_mtime)
+                  key=lambda p: p.stat().st_mtime, reverse=True)
     assert runs, "baselines 下没有任何 run 快照"
-    return json.loads(runs[-1].read_text(encoding="utf-8"))
+    for p in runs:
+        run = json.loads(p.read_text(encoding="utf-8"))
+        if run.get("meta", {}).get("only_qids") is None:
+            return run
+    raise AssertionError("baselines 下没有任何全量 run 快照(仅 --only 子集)")
 
 
 def test_latest_baseline_meta_records_config_snapshot():
@@ -451,7 +456,6 @@ def test_latest_baseline_meta_records_config_snapshot():
     assert meta["writer_max_tokens"] == graph._WRITER_MAX_TOKENS
     assert meta["budget_guard"] == {"min_usable_output": 1024,
                                     "prompt_margin": 512}
-    assert meta["only_qids"] is None   # 守门对象必须是全量产物
 
 
 def test_latest_baseline_full_coverage():

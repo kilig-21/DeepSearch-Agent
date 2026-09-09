@@ -4,7 +4,7 @@
 
 LangGraph 状态图驱动:规划 → 检索 → 阅读 → 证据合并 → 反思循环(可多轮)→ 写作,全程 SSE 流式输出,任务与证据同事务落库,事后逐条追溯。
 
-> 当前版本:v0.9(Phase 2)。本文档只声称已实现并经测试验证的能力;未实现项一律列入路线图。
+> 当前版本:v1.0(Phase 0-3 已闭环)。本文档只声称已实现并经测试验证的能力;未实现项一律列入路线图。
 
 ## 已实现能力
 
@@ -36,7 +36,7 @@ docs       来源白名单(SOURCES.md)、演示脚本
 cd apps/api
 python -m venv .venv && .venv/Scripts/pip install -e ".[dev]"   # Windows;Unix 用 .venv/bin/pip
 # 配置 .env(至少两项):
-#   ZHIPU_API_KEY=...     GLM 模型(智谱开放平台)
+#   DEEPSEEK_API_KEY=...  DeepSeek 模型(OpenAI 兼容端点)
 #   TAVILY_API_KEY=...    网页搜索(Tavily)
 #   FETCH_PROXY=http://...  可选,网络代理
 .venv/Scripts/python -m uvicorn --factory orca.api:create_app --port 8000
@@ -67,6 +67,8 @@ cd apps/api
 
 单轮 vs 反思循环的配对对比(`run_20260906_final.json`,45 行)为**初步观察**,不构成策略等效或反思无效的统计证明:该快照跨提示词/参数版本且含 3 行补跑,预算行为为修复前口径,仅作方向性参考;严谨配对需同参数版本重跑(口径见 PLAN.md §10.4)。
 
+Phase 3 来源适配器对照实验(H1,预登记 `apps/api/eval/H1_PREREGISTRATION.md`,N=8 严格口径 quote-only):在 docs.python.org/zh-cn/ 做 1 个来源适配器与纯 Web 基线对照。结论**收缩方向**——断言引用支持率 79.55%→76.19%、答案覆盖率 68.18%→38.64%、证据命中 49→74、平均 LLM tokens +163.6%;核心缺陷=适配器检索相关性不达标(token 子串匹配无 IDF,高频词命中无关页面)。三面定性:零 credits/白名单域名/补纯 Web 盲区为正面,成本劣化与无关证据为负面(N=8 不构成统计证明)。MCP 按裁剪条款降级为路线图。详见 PLAN.md §11 第十轮。
+
 ## 安全边界
 
 - 来源白名单硬约束:集合外域名不抓正文(代理与 DNS 异常环境下的局限见 docs/SOURCES.md)
@@ -75,7 +77,7 @@ cd apps/api
 
 ## 路线图(未实现)
 
-- **MCP 接入**:外部工具/数据源协议(未实现)
+- **MCP 接入**:外部工具/数据源协议(已评估——H1 对照后按裁剪条款降级,应用价值不依赖 MCP)
 - **Memory**:跨任务记忆(未实现)
 - 来源集合扩展、多模态、并行搜索分支
 

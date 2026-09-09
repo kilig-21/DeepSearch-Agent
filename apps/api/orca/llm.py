@@ -1,7 +1,8 @@
 """LLM 薄协议(计划书 §2.2:默认单模型 + 薄接口, 不做多厂商统一网关)。
 
-- 定版模型(2026-09-05):日常 glm-5.3-flash / 高质量 glm-5.3
-- glm-5.3 为推理型模型:思考段耗尽输出配额 → max_tokens 为必填且须给足
+- 定版模型(2026-09-09 换 DeepSeek):日常 deepseek-v4-flash / 高质量 deepseek-v4-pro
+- max_tokens 为必填且须给足(原智谱 glm-5.3 推理型:思考段与正文共享配额;
+  DeepSeek 推理行为待 probe 重新校准)
 - usage 原样上报, 思考 token 计入预算分账(probe_results.md 定版变更)
 - 重试 ≤2(§3.6), 仅对可重试错误(网络/429/5xx);单调用超时 180s(推理型校准)
 - chat_stream(第四轮评审 P2):SSE 流式, 逐片段产出正文;
@@ -18,8 +19,8 @@ from dataclasses import dataclass
 from .config import (
     LLM_DAILY_MODEL,
     LLM_HIGH_QUALITY_MODEL,
-    ZHIPU_API_KEY,
-    ZHIPU_CHAT_URL,
+    DEEPSEEK_API_KEY,
+    DEEPSEEK_CHAT_URL,
 )
 
 logger = logging.getLogger(__name__)
@@ -49,8 +50,8 @@ class LLMClient:
     def __init__(
         self,
         *,
-        api_key: str = ZHIPU_API_KEY,
-        url: str = ZHIPU_CHAT_URL,
+        api_key: str = DEEPSEEK_API_KEY,
+        url: str = DEEPSEEK_CHAT_URL,
         post: PostFn | None = None,
         timeout_s: float = DEFAULT_TIMEOUT,
         max_retries: int = MAX_RETRIES,
@@ -90,9 +91,9 @@ class LLMClient:
             "temperature": temperature,
             "max_tokens": max_tokens,
         }
-        # 思考控制(实测 2026-09-05):5.3 系列始终思考, thinking.type 不接受
-        # disabled/low/high/max(智谱 1210 错误);顶层 reasoning_effort="low"
-        # 是唯一实测将思考压到 0 的方式(OpenAI 风格兼容参数)。
+        # 思考控制:reasoning_effort="low" 将思考压到 0(原智谱 glm-5.3 实测,
+        # 该系列始终思考且 thinking.type 报 1210 错误)。DeepSeek v4 是否接受
+        # 该参数待冒烟验证——若报"未知参数", 删掉 reasoning_effort 调用即可。
         # None = 不传字段 = 模型默认思考(writer 推理任务保留)。
         if reasoning_effort is not None:
             payload["reasoning_effort"] = reasoning_effort

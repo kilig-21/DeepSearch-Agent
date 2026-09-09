@@ -8,16 +8,17 @@ from dotenv import load_dotenv
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 load_dotenv(PROJECT_ROOT / ".env")
 
-ZHIPU_API_KEY = os.environ.get("ZHIPU_API_KEY", "")
+DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY", "")
 TAVILY_API_KEY = os.environ.get("TAVILY_API_KEY", "")
 
-ZHIPU_CHAT_URL = "https://open.bigmodel.cn/api/paas/v4/chat/completions"
+DEEPSEEK_CHAT_URL = "https://api.deepseek.com/chat/completions"
 TAVILY_SEARCH_URL = "https://api.tavily.com/search"
 
-# LLM 定版(2026-09-05 用户定版: 5.3 系列; 详见 PLAN.md §8)
-LLM_DAILY_MODEL = "glm-5.3-flash"    # 日常迭代/跑量
-LLM_HIGH_QUALITY_MODEL = "glm-5.3"   # 高质量模式(最终报告)
-LLM_PROBE_MODELS = ["glm-5.3-flash", "glm-5.3"]
+# LLM 定版(2026-09-09 换 DeepSeek): 简单/机械任务 flash, 难任务(最终报告) pro
+# 注: budget/timeout 等 probe 回填值基于智谱 glm-5.3 实测, DeepSeek 需重新校准
+LLM_DAILY_MODEL = "deepseek-v4-flash"      # 日常迭代/跑量/机械任务
+LLM_HIGH_QUALITY_MODEL = "deepseek-v4-pro"  # 高质量模式(最终报告/难任务)
+LLM_PROBE_MODELS = ["deepseek-v4-flash", "deepseek-v4-pro"]
 
 # 数据库(本地自用; data/ 不进版本库)
 DB_PATH = PROJECT_ROOT / "data" / "orca.db"

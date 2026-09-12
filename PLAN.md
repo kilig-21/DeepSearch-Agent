@@ -139,7 +139,7 @@
 | 网页转文本 | Jina Reader 免费档(配额限制见 §8)+ 自建兜底 | 省去自写解析 |
 | 搜索 API | Tavily 免费档(计费规则见 §8);**备胎:`ddgs`**(DuckDuckGo,免费无 key 但非官方、随时可能失效,仅限开发调试) | 免费额度够个人开发;搜索为可插拔接口 |
 | 网页转文本 | **Defuddle(本地 CLI,主力,v1.2.1)**;兜底分层:Python 侧 httpx+trafilatura → Jina Reader(云服务)→ 动态页 Playwright(重,按需引入,不进 MVP 主链路) | 本地提取**内容不出机器**(合规友好,见 §9.1)、无配额、已验证安装(0.19.3);Jina 仅在本地提取失败时兜底 |
-| LLM | **日常 glm-5.3-flash / 高质量 glm-5.3(用户定版 2026-09-05)** + `LLMClient` 薄协议;两者实测可调(3.1~3.6s);⚠️ 5.3 为推理型模型,max_tokens 须覆盖思考段;价格以 [open.bigmodel.cn/pricing](https://open.bigmodel.cn/pricing) 为准 | 不做多厂商统一网关 |
+| LLM | **日常 deepseek-v4-flash / 高质量 deepseek-v4-pro(用户定版 2026-09-09,替换 glm-5.3 系列)** + `LLMClient` 薄协议(OpenAI 兼容端点 `api.deepseek.com/chat/completions`);⚠️ 推理型模型,思考段与正文**共享** max_tokens,且实测思考量显著高于 glm(真实页 reader 单次 reasoning 3409~4096、writer 3084~4690),调用**必须给足**输出配额(probe T12);实测延迟 reader 15.7~18.3s / writer 60.6~77.4s;价格以 DeepSeek 官方定价页为准(**待核**) | 不做多厂商统一网关 |
 | 数据库 | SQLite + SQLAlchemy | 零运维;任务/报告/来源/证据全部落库 |
 | 部署 | 前端 Vercel / 后端本地或一台轻量 VPS | 成本≈0 |
 
@@ -324,15 +324,17 @@ data: {"task_id":"t_xxx","ts":"...","round":1,"query":"...","results":[...]}
 
 **初始限制值(v1.3 恢复 v1.2 缺失项;标注"待回填"的必须 Phase 0 回填,其余实测后可调)**:
 
-| 限制 | 初始值(**Phase 0 实测回填,2026-09-05**;探针记录见 `apps/api/docs/probe_results.md`) |
+| 限制 | 取值(**Phase 0 实测回填 2026-09-05;2026-09-12 换 DeepSeek 后重校准**;探针记录见 `apps/api/docs/probe_results.md`) |
 |---|---|
 | 总时长 | **≤ 8 分钟**(实测单任务全链路 ~15s,余量充足) |
 | 抓取页数 | **≤ 12** |
 | 每调用重试 | **≤ 2 次** |
-| 单任务 LLM tokens | **≤ 50k**(**Phase 1A 实测校准**:线性链路在线题 7.8k~13.7k,余量充足;50k 上限保留给 Phase 2 反思循环) |
+| 单任务 LLM tokens | **≤ 100k**(原 50k 为 glm 校准值;换 DeepSeek 后思考 token 显著上升——真实页单次 reader 约 10.7k,而 glm 全量基线单题实耗 27k~48k 且停轮从未由预算触发。按 ~1.5x 折算 DeepSeek 单题约 40k~72k,故上调一倍使预算重新不成为约束) |
+| writer 预留 | **20k**(原 8k;glm 基线中 writer 实耗 7981 已用满预留,DeepSeek writer 形态小证据池实测即 4234~5941) |
+| 最小可用输出阈值 | **4096**(原 1024;调用前约束判定线 `allowed < 该值 → 不发起调用`。DeepSeek 真实页实测:completion 3639 才产出正文,4096 配额可被思考吃穿至 `finish=length`/正文 0 字符) |
 | 单页字符 | **≤ 100k**(实测最大单页 70k) |
 | Jina 兜底单任务 token 上限 | 默认关闭;启用时 ≤ 500k 并校准 |
-| 单调用超时 | LLM **180s**(**Phase 1A 校准,2026-09-05**:定版 glm-5.3 系列为推理型,思考段远超 4 系列的 4~6s,30s 实测 ReadTimeout)/ 抓取 **20s** |
+| 单调用超时 | LLM **180s**(**Phase 1A 校准 2026-09-05**:定版 glm-5.3 系列为推理型,思考段远超 4 系列的 4~6s,30s 实测 ReadTimeout;**2026-09-12 DeepSeek 复核维持**:最大一次实测 writer 77.4s、reader 18.3s,余量 ~2.3x;流式 writer 的超时按相邻两次读的间隔计,不限制整条流总时长)/ 抓取 **20s** |
 | 最大重定向次数 | **3**(已在 `orca/fetch.py` 实现) |
 | Tavily credits | ≤ 16 硬上限(含计费重试) |
 
@@ -511,10 +513,12 @@ GET  /api/health
 | 任务耗用算例 | Basic:3轮×4查询=12 credits → `floor(1000/12)=83` 任务/月;Advanced 24 credits **超出 16 上限,不适用**。预算分账:若给开发/评测预留 500 credits,正式任务容量 `floor(500/12)=41` 个 | 自算(公式附 §3.6) |
 | Jina Reader(v1.2.1 降为兜底) | 新 key **一次性** 10M 免费 tokens(非每月重赠);无 key Reader 20 RPM;兜底用量小,可不注册,需要时再办 | [jina.ai/reader](https://jina.ai/reader/) |
 | Claude Sonnet 5 | 输入 $2/M、输出 $10/M;算例:每任务输入 10 万+输出 1 万 ≈ **$0.30/任务**(未含搜索抓取) | [platform.claude.com/docs/en/about-claude/pricing](https://platform.claude.com/docs/en/about-claude/pricing) |
-| LLM(定版 2026-09-05) | **日常 glm-5.3-flash / 高质量 glm-5.3(用户定版)** — 实测可调,延迟 3.1~3.6s;⚠️ 5.3 为推理型模型,max_tokens=100 时 content 为空(思考即耗尽),接入时须给足输出上限;早期探针:glm-4-flash 3.9s/70 tokens(已被替换)、glm-4.5-flash 不采用(22s);价格以 [open.bigmodel.cn/pricing](https://open.bigmodel.cn/pricing) 为准 | 实测(apps/api/docs/probe_results.md) |
+| LLM(定版 2026-09-09,替换 2026-09-05 的 glm-5.3 系列) | **日常 deepseek-v4-flash / 高质量 deepseek-v4-pro(用户定版)** — 实测延迟 reader 15.7~18.3s、writer 60.6~77.4s;⚠️ 推理型模型,思考段与正文共享 max_tokens 且思考量远高于 glm,**必须给足输出上限**(真实页 max_tokens=4096 时 1/2 页被思考吃穿、正文 0 字符);`reasoning_effort="low"` 被上游接受但仅降思考约 36%(非 glm 的压到 0);早期探针:glm-4-flash 3.9s/70 tokens(已被替换)、glm-4.5-flash 不采用(22s)、glm-5.3 系列(已被替换);DeepSeek 价格以官方定价页为准(**待核**) | 实测(apps/api/docs/probe_results.md, T12) |
 | VPS | ¥20~40/月为**预算假设**(未指定商家/规格/续费条件) | — |
 
 **预算结论(2026-09-05,模型定版 glm-5.3 系列后)**:LLM 费用取决于 5.3 系列定价(**待核定价页**;若 flash 档免费则 ≈ ¥0,另注意推理型模型思考 token 也计费,单任务 token 消耗高于 4 系列);30~50 正式任务 + 等量重跑的搜索量 720~1200 credits **可能超 Tavily 免费档**,需分账预留。**月成本目标 ≈ ¥0~40**(仅托管/超额 credits),Phase 1A 成本日志上线后以实测校准。
+
+**预算结论更新(2026-09-12,换 DeepSeek 后)**:上段的**结构不变**(推理型思考 token 计费、credits 需分账预留),但 **LLM token 量级已按实测上调**——单任务上限 50k→100k、writer 预留 8k→20k(依据见 §3.6 表)。Tavily credits 侧不变:仍为 `≤16/任务`,搜索量与模型无关。DeepSeek 单价与免费档**待核官方定价页**,核价后回填本行;在此之前"月成本目标 ≈ ¥0~40"仅覆盖托管/超额 credits,不含 LLM 费用。
 
 配套:调用上限熔断 Phase 1A 实现;Jina 20 RPM 需限速 + 429 退避;三账分开(LLM/Tavily/Jina)。
 

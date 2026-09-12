@@ -47,7 +47,7 @@ def make_tools(llm_sides, search_results=None, fetch_failures=None,
                budget=None, search_error=None, llm_stream_chunks=None,
                *, reflect=False, reflect_sides=None, search_sides=None,
                pages=None, max_rounds=3, llm_usage=None,
-               llm_stream_error=None):
+               llm_stream_error=None, search_credits=None):
     """llm_sides: 按调用序返回的 content 列表;fetch_failures: {url: Exception};
     llm_stream_chunks: writer 流式片段列表(提供时 writer 走流式);
     llm_stream_error: 流式 gen 在 usage 帧落账后抛出的异常(复现 R2 空流
@@ -90,14 +90,19 @@ def make_tools(llm_sides, search_results=None, fetch_failures=None,
         return gen(), usage_box
 
     search_sides = list(search_sides) if search_sides is not None else None
+    # search_credits: 按搜索调用序返回的 credit 数(默认 1);打空补搜会在
+    # 一次搜索里实际发生 2 次调用, 用 2 复现事后补记路径。
+    search_credits_q = (list(search_credits) if search_credits is not None
+                        else None)
 
     def search_fn(query, *, limit):
         calls["search"].append(query)
         if search_error is not None:
             raise search_error
+        credits = search_credits_q.pop(0) if search_credits_q else 1
         if search_sides is not None:
-            return (search_sides.pop(0), 1)
-        return (search_results or [], 1)
+            return (search_sides.pop(0), credits)
+        return (search_results or [], credits)
 
     async def fetch_async(url, *, allowed_domains=None, proxy=None):
         calls["fetch"].append(url)
@@ -203,9 +208,12 @@ def test_fetch_failure_emits_warning_and_continues():
 def test_research_budget_fuse_stops_research_but_writes_program_note():
     """研究额度耗尽 → budget_exhausted;证据为空时 writer 不调 LLM,
     生成程序说明(§3.6 两级规则)。"""
-    # R1 调用前约束后 total 须盖过一次最小调用(planner prompt 估算+1024);
-    # 研究额度 150 = total 2000 − reserve 1850, 仍 < fake usage 150 后续
-    b = make_budget(total_llm=2000, reserve=1850)
+    # R1 调用前约束后 total 须盖过一次最小调用(planner prompt 估算
+    # + MIN_USABLE_OUTPUT);研究额度 150 = total 5100 − reserve 4950,
+    # 恰被 planner 的 fake usage 150 打满 → searcher 入口 budget_exhausted。
+    # (DeepSeek 重校准后 MIN_USABLE_OUTPUT 由 1024 升至 4096, 故 total 与
+    #  reserve 同步抬升 3100 以保持研究额度 150 不变。)
+    b = make_budget(total_llm=5100, reserve=4950)
     tools, events, calls = make_tools([PLANNER_JSON], budget=b)
     state = asyncio.run(graph.run_research(tools, "Q", task_id="t_test4"))
 
@@ -354,9 +362,10 @@ def _make_tools_multi(llm_sides, *, budget=None, clock=None):
 def test_reader_rechecks_research_budget_between_pages():
     """多页任务中途研究额度耗尽 → 剩余页不再抓取/调模型(实际调用次数
     不超预算),已有候选证据保留并走 writer 预留出报告(P1)。"""
-    # R1 后 total 须盖过 planner 一次最小调用;研究额度 450(= planner 150
-    # + 2 页摘要 300)不变: total 2650 − reserve 2200 = 450
-    b = make_budget(total_llm=2650, reserve=2200)
+    # R1 后 total 须盖过 planner/reader 各自的最小调用;研究额度 450
+    # (= planner 150 + 2 页摘要 300)不变: total 5750 − reserve 5300 = 450。
+    # (MIN_USABLE_OUTPUT 1024→4096 后同步抬升 total/reserve, 额度语义不变。)
+    b = make_budget(total_llm=5750, reserve=5300)
     tools, events, calls = _make_tools_multi(
         [PLANNER_JSON,
          reader_json(["自由线程模式,可禁用全局解释器锁"]),
@@ -424,6 +433,33 @@ def test_writer_stream_max_tokens_leaves_room_for_reasoning():
     assert writer_calls[0]["max_tokens"] >= 16384
 
 
+def test_reader_max_tokens_leaves_room_for_reasoning():
+    """DeepSeek v4 与 glm-5.3 同型: 思考段与正文共享 max_tokens 配额。
+
+    probe T12(2026-09-12, 真实白名单页而非构造小样本)实测:
+      docs.python.org/zh-cn/3/whatsnew/3.13.html → prompt 7053,
+        reasoning 3409 / completion 3639 → 正文 506 字符(正常);
+      docs.python.org/zh-cn/3/using/cmdline.html → prompt 7454,
+        reasoning 4096 / completion 4096 → **finish=length, 正文 0 字符**。
+    即 4096 在真实页面上会被思考吃穿(1/2 页栽), reader 配额须上调一倍
+    ——与 glm 时代 _WRITER_MAX_TOKENS 8192→16384 是同一处置。
+    """
+    tools, events, calls = make_tools(
+        [PLANNER_JSON,
+         reader_json(["自由线程模式,可禁用全局解释器锁",
+                      "交互式解释器支持多行编辑与彩色提示"]),
+         reader_json(["错误消息更加友好"]),
+         WRITER_REPORT],
+        search_results=default_search_results())
+    asyncio.run(graph.run_research(tools, "Q", task_id="t_reader_mt"))
+
+    # calls["llm"][0] 是 planner, 其后为 reader(同一 daily 档, 故按下标区分)
+    reader_calls = calls["llm"][1:]
+    assert reader_calls, "reader 应发起调用"
+    assert reader_calls[0]["tier"] == "daily"
+    assert reader_calls[0]["max_tokens"] == 8192
+
+
 def test_writer_stream_revision_replaces_draft():
     """流式草稿校验失败 → 修订后 emit replace 帧(前端整体替换草稿)。"""
     tools, events, calls = make_tools(
@@ -471,14 +507,20 @@ def test_revision_skips_llm_when_total_budget_exhausted():
     降级 + warning 事件;实耗不越上限, stop_reason 保持研究类真实值
     (第五轮评审 R3;原"总额度恰打穿"路径在 R1 clamp 下不可达——writer
     合法调用后必剩 prompt 估算+边际, 故以额度不足触发同一降级分支)。
-    llm_sides 只提供 4 侧: 修订若意外调模型将 pop 空列表报错。"""
-    b = make_budget(total_llm=3300, reserve=0)  # fake usage 400/次
+    llm_sides 只提供 4 侧: 修订若意外调模型将 pop 空列表报错。
+
+    数值标定(MIN_USABLE_OUTPUT 1024→4096 后重标): writer 侧要过 4096 门槛
+    (total 7500 − 已用 1200 − writer prompt − 512 ≈ 5100), 而修订 prompt
+    含**较长报告全文**(故改用约 2000 字报告输出)→ 修订可用额度 ≈3200
+    < 4096, 稳定落进"额度不足 → 确定性降级"分支。"""
+    b = make_budget(total_llm=7500, reserve=0)  # fake usage 400/次
     tools, events, calls = make_tools(
         [PLANNER_JSON,
          reader_json(["自由线程模式,可禁用全局解释器锁",
                       "交互式解释器支持多行编辑与彩色提示"]),
          reader_json(["错误消息更加友好"]),
-         "结论 [5] 来自外部。"],                    # writer 主调用输出无效引用
+         # writer 主调用输出无效引用;报告须够长, 修订 prompt 才放不下
+         "结论 [5] 来自外部。" + "正文内容。" * 400],
         search_results=default_search_results(),
         budget=b, llm_usage={"prompt_tokens": 250,
                              "completion_tokens": 150,
@@ -601,8 +643,13 @@ def test_reflector_degrades_without_call_when_remaining_below_min():
 def test_citation_revision_degrades_when_remaining_below_min():
     """节点级:writer 调用后剩余额度不足以修订(修订 prompt 含报告全文,
     越长越贵)→ 程序化降级处理引用, 不再调模型(修订也是模型调用,
-    R1 同口径约束)。"""
-    b = make_budget(total_llm=4_000, reserve=200)
+    R1 同口径约束)。
+
+    数值标定(MIN_USABLE_OUTPUT 1024→4096 后重标): total 4000 时 writer
+    本体就已跌破 4096 门槛、直接走程序说明, 断言失去意义;抬高到 8000
+    使 writer 本体(可用 ≈5100)可调, 而修订(报告 ≈5000 字)仍不足。
+    """
+    b = make_budget(total_llm=8_000, reserve=200)
     b.settle_llm(2_000, for_writer=False)           # writer 剩余可调用
     long_bad_report = "结论 [5] 来自外部。" + "正文内容。" * 833  # ≈5000 字
     tools, events, calls = make_tools(
@@ -656,3 +703,29 @@ def test_writer_non_stream_empty_content_raises_llm_error():
 
     assert b.usage_snapshot()["llm_tokens"] == 150   # 成本已入账
     assert len(calls["llm"]) == 1                    # 无额外(修订)调用
+
+
+def test_searcher_reconciles_extra_search_credits():
+    """打空补搜使一次搜索实际发生 2 次调用, 预扣的 1 credit 必须事后补记。
+
+    searcher 在调用前按"预期 1 次调用"预扣 1 credit;WhitelistRetrySearch
+    会在整轮无白名单命中时补一次限定域名搜索, 该次搜索实耗 2 credits。
+    不补记的后果:credits 熔断(§3.6 ≤16)被系统性低算, 且终端事件的
+    credits_used 与 DB / `orca cost` 的 tavily_credits 三路口径不一致 ——
+    违反"成本分账三路可查"的承诺。
+    """
+    tools, events, _calls = make_tools(
+        [PLANNER_JSON,
+         reader_json(["自由线程模式,可禁用全局解释器锁",
+                      "交互式解释器支持多行编辑与彩色提示"]),
+         reader_json(["错误消息更加友好"]),   # reader 按页调用(2 页)
+         WRITER_REPORT],
+        search_results=default_search_results(),
+        search_credits=[2],                  # 一次搜索实耗 2 credits
+    )
+    asyncio.run(graph.run_research(tools, "Q", task_id="t_credit_recon"))
+
+    assert tools.budget.usage_snapshot()["tavily_credits"] == 2
+    search_ev = [p for e, p in events if e == "search"]
+    assert search_ev, "应发出 search 事件"
+    assert search_ev[0]["credits_used"] == 2

@@ -50,7 +50,7 @@ npm install && npm run dev        # http://localhost:3000
 .venv/Scripts/python -m orca cost --last   # 单任务成本小结(分账)
 ```
 
-预算上限可用环境变量覆盖(`ORCA_BUDGET_*`):默认 tokens 50k、Tavily credits 16、页数 12、总时长 8 分钟。
+预算上限可用环境变量覆盖(`ORCA_BUDGET_*`):默认 tokens 100k(其中 writer 预留 20k,研究额度 80k)、Tavily credits 16、页数 12、总时长 8 分钟。取值依据见 `PLAN.md` §3.6 与 `apps/api/docs/probe_results.md` T12。
 
 ## 评测
 

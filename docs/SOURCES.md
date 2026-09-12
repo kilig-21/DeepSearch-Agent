@@ -20,6 +20,6 @@
 ## 数据流向说明(README 同步用)
 
 - 正文提取:本地完成(Defuddle CLI / trafilatura),内容不出本机
-- LLM 调用:截取的正文片段会发送至智谱 API(见其[用户协议](https://open.bigmodel.cn/dev/api));不要把含个人敏感信息的页面加入来源集合
+- LLM 调用:截取的正文片段会发送至 DeepSeek API(见其[用户协议](https://api-docs.deepseek.com/));不要把含个人敏感信息的页面加入来源集合
 - 搜索:Tavily API(见其 [Terms](https://www.tavily.com/terms))
 - 本地清理:`python -m orca cleanup`(后端停止后执行)

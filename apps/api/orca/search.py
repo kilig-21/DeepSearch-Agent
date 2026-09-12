@@ -6,7 +6,7 @@
 """
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 
 import httpx
@@ -74,13 +74,20 @@ class TavilySearch:
         self._url = url
         self._timeout_s = timeout_s
 
-    def search(self, query: str, *, limit: int = 5) -> tuple[list[SearchResult], int]:
+    def search(self, query: str, *, limit: int = 5,
+               include_domains: Sequence[str] | None = None,
+               ) -> tuple[list[SearchResult], int]:
+        payload: dict = {"query": query, "max_results": limit,
+                         "search_depth": "basic"}
+        # 限定域名搜索(可选):把检索面收缩到来源集合内。默认不发该参数——
+        # 主搜索保持全网检索, 集合外结果供"待核实链接"(§9.1)。
+        if include_domains:
+            payload["include_domains"] = list(include_domains)
         try:
             resp = self._post(
                 self._url,
                 headers={"Authorization": f"Bearer {self._api_key}"},
-                json={"query": query, "max_results": limit,
-                      "search_depth": "basic"},
+                json=payload,
                 timeout=self._timeout_s,
             )
         except Exception as e:  # noqa: BLE001
@@ -95,6 +102,38 @@ class TavilySearch:
             for item in data.get("results", [])
         ]
         return results, 1  # Basic 固定 1 credit/次
+
+
+class WhitelistRetrySearch:
+    """打空补搜(§9.1 语义不变):主搜索全落在集合外时补一次限定域名搜索。
+
+    背景(probe T12 补充, 2026-09-12 真实 8 题试点):Tavily 主搜索不限定
+    域名, 在中文技术主题上常返回 CSDN/知乎/菜鸟教程等集合外站点, 白名单
+    过滤后整轮 0 页可抓 → 0 证据 → 报告退化为程序生成的"研究未能完成"。
+    实测 8 题命中 2 题(fact_mdn401 / fact_venv, 结论为 0 证据)。
+
+    只在"主搜索有结果、但无一落在集合内"时补搜:
+    - 主搜索结果照旧原样保留 —— 集合外结果仍是"待核实链接"的来源(§9.1)
+    - 限定域名命中排在返回列表最前, 使 reader 优先读可抓页面(§3.2)
+    - 补搜照常消耗 1 credit, 由调用方按返回的 credits 如实入账(§3.6)
+    - 主搜索本就 0 结果时不补搜:无证据表明域名限定能救, 不白花 credit
+    """
+
+    def __init__(self, base, *, allowed_domains) -> None:
+        self._base = base
+        self._allowed = set(allowed_domains)
+
+    def search(self, query: str, *, limit: int = 5,
+               ) -> tuple[list[SearchResult], int]:
+        results, credits = self._base.search(query, limit=limit)
+        if not results:
+            return results, credits
+        allowed, _outside = split_by_allowlist(results, self._allowed)
+        if allowed:
+            return results, credits
+        scoped, scoped_credits = self._base.search(
+            query, limit=limit, include_domains=sorted(self._allowed))
+        return dedup(scoped + results), credits + scoped_credits
 
 
 class DdgsSearch:

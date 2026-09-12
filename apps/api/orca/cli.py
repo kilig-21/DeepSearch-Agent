@@ -42,11 +42,15 @@ def default_tools_builder(budget: Budget) -> GraphTools:
     """真实组件组装;测试注入替代 builder。"""
     from .extract import fetch_and_extract_async
     from .llm import LLMClient
-    from .search import TavilySearch
+    from .search import TavilySearch, WhitelistRetrySearch
     from .adapters import PythonZhDocsAdapter
 
     llm = LLMClient()
-    tavily = TavilySearch()
+    # 打空补搜:主搜索保持全网(集合外结果供"待核实链接"), 仅当整轮无
+    # 白名单命中时补一次限定域名搜索 —— 否则 0 页可抓、报告退化为
+    # "研究未能完成"(实测 8 题中 2 题, 见 search.WhitelistRetrySearch)
+    tavily = WhitelistRetrySearch(TavilySearch(),
+                                  allowed_domains=ALLOWED_DOMAINS)
 
     def search_fn(query: str, *, limit: int):
         return tavily.search(query, limit=limit)

@@ -1,7 +1,7 @@
 """Phase 0 验收: 命令行跑通「搜索 → 抓取 → 摘要」全链路。
 
 运行: python scripts/probe_pipeline.py "Python 3.13 有什么新特性?"  (项目根目录)
-记录各步耗时与成本(Tavily 1 credit + GLM tokens), 结果回填 PLAN.md §3.6/§8。
+记录各步耗时与成本(Tavily 1 credit + DeepSeek tokens), 结果回填 PLAN.md §3.6/§8。
 """
 from __future__ import annotations
 
@@ -19,8 +19,8 @@ from orca.config import (  # noqa: E402
     LLM_DAILY_MODEL,
     TAVILY_API_KEY,
     TAVILY_SEARCH_URL,
-    ZHIPU_API_KEY,
-    ZHIPU_CHAT_URL,
+    DEEPSEEK_API_KEY,
+    DEEPSEEK_CHAT_URL,
 )
 from orca.fetch import FetchBlocked, safe_fetch  # noqa: E402
 
@@ -64,8 +64,8 @@ def main(topic: str) -> None:
     # 3) 摘要(GLM 日常模型)
     t0 = time.perf_counter()
     resp = httpx.post(
-        ZHIPU_CHAT_URL,
-        headers={"Authorization": f"Bearer {ZHIPU_API_KEY}"},
+        DEEPSEEK_CHAT_URL,
+        headers={"Authorization": f"Bearer {DEEPSEEK_API_KEY}"},
         json={
             "model": LLM_DAILY_MODEL,
             "messages": [{
@@ -88,7 +88,8 @@ def main(topic: str) -> None:
     print(data["choices"][0]["message"]["content"].strip())
     print("-" * 70)
     print(f"来源: {picked['url']}")
-    print(f"总成本: Tavily 1 credit + GLM {total_tokens} tokens({LLM_DAILY_MODEL})")
+    print(f"总成本: Tavily 1 credit + DeepSeek {total_tokens} tokens"
+          f"({LLM_DAILY_MODEL})")
 
 
 if __name__ == "__main__":

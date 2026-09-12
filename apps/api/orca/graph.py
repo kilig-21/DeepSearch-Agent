@@ -35,10 +35,17 @@ CONTROL_STOPS = {"total_budget_exhausted", "timeout", "execution_error",
 
 _TOP_N = 4               # searcher 每轮选 top-N(§3.2)
 _MAX_PROMPT_CHARS = 15_000   # reader 喂给 LLM 的正文截断(抓取上限仍 100k)
-_READER_MAX_TOKENS = 4096
+# DeepSeek v4 推理型: 思考段与正文共享 max_tokens(probe T12, 真实白名单页
+# 而非构造小样本)。4096 实测被吃穿 1/2 —— using/cmdline.html 页 reasoning
+# =4096、finish=length、content 0 字符; whatsnew/3.13.html 页 reasoning=3409
+# / completion=3639 才堪堪够用。提高一倍给思考留余量(与 glm 时代 writer
+# 8192→16384 同一处置; probe 结论: 调用必须给足 max_tokens)
+_READER_MAX_TOKENS = 8192
 # glm-5.3 推理型: 思考段与正文共享 max_tokens(probe T9);在线实测
 # (2026-09-06 conflict_typing 题 3/3)8192 会被思考吃穿(length 截断、
 # content 0 片段)→ 提高一倍给思考留余量(probe 结论: 调用必须给足)
+# DeepSeek 复核(T12, 2026-09-12): writer 形态实测 completion 3550~5257 即
+# finish=stop, 16384 余量 3x 以上, 维持不变
 _WRITER_MAX_TOKENS = 16384
 _REVISE_MAX_TOKENS = 8192   # 引用修订(citations.revise_report 原默认值)
 
@@ -177,6 +184,7 @@ def make_searcher(tools: GraphTools):
         query = nq[0] if nq else (state.get("planned_query") or state["topic"])
         adapter_metadata: dict[str, str] | None = None
         fallbacks: list[dict] | None = None
+        pre_charged = 0  # 预扣的 credits(实际消耗由下方事后补记对齐)
         if tools.source_adapter is not None:
             try:
                 adapter_out = tools.source_adapter.search(query, limit=8)
@@ -196,6 +204,7 @@ def make_searcher(tools: GraphTools):
                 if tools.budget.research_exhausted() or not tools.budget.charge_credits(1):
                     return {"stop_reason": "budget_exhausted",
                             "source_adapter_fallbacks": fallbacks}
+                pre_charged = 1
                 try:
                     results, credits = tools.search_fn(query, limit=8)
                 except Exception as web_error:  # noqa: BLE001
@@ -206,12 +215,18 @@ def make_searcher(tools: GraphTools):
         else:
             if tools.budget.research_exhausted() or not tools.budget.charge_credits(1):
                 return {"stop_reason": "budget_exhausted"}
+            pre_charged = 1
             try:
                 results, credits = tools.search_fn(query, limit=8)
             except Exception as e:  # noqa: BLE001
                 tools.emit("warning", {"stage": "searcher",
                                        "detail": f"搜索失败: {e}"})
                 return {"stop_reason": "no_new_evidence"}
+
+        # 事后补记:一次搜索可能实际发生多次调用(WhitelistRetrySearch 在整轮
+        # 无白名单命中时补一次限定域名搜索),预扣的 1 credit 不足以覆盖 →
+        # 差额如实补记,否则 credits 熔断被低算、事件/DB/`orca cost` 三路不一致
+        tools.budget.record_credits(credits - pre_charged)
 
         # 循环模式跨轮去重(§3.2):仅本轮新发现的 URL 喂 reader——已抓页
         # 不重复抓取/摘要(控制 token);事件与轮记录只展示本轮结果

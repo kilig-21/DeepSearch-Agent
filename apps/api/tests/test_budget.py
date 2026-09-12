@@ -145,10 +145,15 @@ def test_max_output_tokens_negative_when_prompt_alone_exceeds():
 
 
 def test_min_usable_output_threshold_exported():
-    """阈值自定并说明: glm-5.3 推理型输出配额低于 1024 时连最小思考+正文
-    都放不下(实测思考动辄数千 token), 调用大概率空响应/残缺 → 不值得发起。
+    """阈值自定并说明: DeepSeek v4 推理型输出配额低于 4096 时连最小思考+
+    正文都放不下, 调用大概率空响应/残缺 → 不值得发起。
+
+    定值依据(probe T12, 2026-09-12 换 DeepSeek 后重校准): 真实白名单页
+    (docs.python.org/zh-cn/3/whatsnew/3.13.html)实测 completion=3639 才能
+    产出 506 字符正文; 同批另一页在 4096 配额下思考吃到 finish=length、
+    正文 0 字符 —— 配额不足时是纯烧钱。
     作为库级常量导出, 调用方统一判定。"""
-    assert budget.MIN_USABLE_OUTPUT == 1_024
+    assert budget.MIN_USABLE_OUTPUT == 4_096
     assert budget.PROMPT_MARGIN == 512
 
 

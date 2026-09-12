@@ -94,14 +94,15 @@ def test_scenario_2a_research_budget_exhausted_still_reports(tmp_path):
     """研究额度耗尽 → 停止研究走 writer 预留路径, 任务仍 completed 且有报告。
 
     构造: 研究额度 150 = planner 实测用量(R1 后 total 须盖过一次最小
-    调用, 故 total=2000/reserve=1850), 总额度 2000 不爆 → searcher 入口
-    budget_exhausted(研究类);writer 不调模型(无证据 → 程序生成说明),
-    报告落库, 任务 completed。
+    调用, 即 planner prompt 估算 + MIN_USABLE_OUTPUT;DeepSeek 重校准后
+    该阈值为 4096, 故 total=5100/reserve=4950), 总额度 5100 不爆 →
+    searcher 入口 budget_exhausted(研究类);writer 不调模型(无证据 →
+    程序生成说明), 报告落库, 任务 completed。
     """
     calls = {"n": 0}
 
     def budget_builder():
-        return make_budget(total_llm=2000, reserve=1850)
+        return make_budget(total_llm=5100, reserve=4950)
 
     def builder(budget):
         tools, _e, _c = make_tools(happy_llm_sides(),

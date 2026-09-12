@@ -1,10 +1,10 @@
 """LLM 薄协议(计划书 §2.2:默认单模型 + 薄接口, 不做多厂商统一网关)。
 
 - 定版模型(2026-09-09 换 DeepSeek):日常 deepseek-v4-flash / 高质量 deepseek-v4-pro
-- max_tokens 为必填且须给足(原智谱 glm-5.3 推理型:思考段与正文共享配额;
-  DeepSeek 推理行为待 probe 重新校准)
+- max_tokens 为必填且须给足(glm-5.3 / DeepSeek v4 均为推理型:思考段与
+  正文共享配额;DeepSeek 已由 probe T12 复核, 见 graph._READER_MAX_TOKENS)
 - usage 原样上报, 思考 token 计入预算分账(probe_results.md 定版变更)
-- 重试 ≤2(§3.6), 仅对可重试错误(网络/429/5xx);单调用超时 180s(推理型校准)
+- 重试 ≤2(§3.6), 仅对可重试错误(网络/429/5xx);单调用超时 180s(见下)
 - chat_stream(第四轮评审 P2):SSE 流式, 逐片段产出正文;
   usage 经 include_usage 在流末尾返回;流式不做重试(草稿可中断)
 """
@@ -27,7 +27,12 @@ logger = logging.getLogger(__name__)
 
 MAX_RETRIES = 2       # 每调用重试上限(§3.6)
 # §3.6 原回填 30s 基于 4 系列(4~6s);glm-5.3 推理型思考段远超此值,
-# Phase 1A 冒烟实测 30s ReadTimeout, 校准为 180s(计划书值将在验收后回填)
+# Phase 1A 冒烟实测 30s ReadTimeout, 校准为 180s。
+# DeepSeek 复核(probe T12, 2026-09-12)确认 180s 仍是正确量级而非常态开销:
+#   reader(flash, low, 真实白名单页) 15.7s / 18.3s
+#   writer(pro, 最大一次完成 5257 tokens) 60.6s / 77.4s —— 余量约 2.3x
+# 注: 流式 writer 走 httpx.stream, 该超时按**两次读之间的间隔**计, 不限制
+# 整条流的总时长, 故长报告不会因总时长撞超时。
 DEFAULT_TIMEOUT = 180.0
 
 Tier = str  # "daily" | "high_quality"
@@ -91,9 +96,14 @@ class LLMClient:
             "temperature": temperature,
             "max_tokens": max_tokens,
         }
-        # 思考控制:reasoning_effort="low" 将思考压到 0(原智谱 glm-5.3 实测,
-        # 该系列始终思考且 thinking.type 报 1210 错误)。DeepSeek v4 是否接受
-        # 该参数待冒烟验证——若报"未知参数", 删掉 reasoning_effort 调用即可。
+        # 思考控制:reasoning_effort="low" —— 上游接受该参数, 但**压制幅度远
+        # 小于 glm**。两侧实测(probe T12, max_tokens=3000 使两组都自然收尾
+        # 以免配额截断污染对照, reasoning_tokens):
+        #   glm-5.3  : 传 low 后整次调用 382 tokens 完成(思考≈0)
+        #   DeepSeek : 不传 1300/1537/1617(均 1485) vs 传 low 775/698/1389
+        #              (均 954) —— 约 -36%, 且非 0
+        # 结论: 保留 low(仍省配额与延迟), 但不得据此假设"思考被压到 0"——
+        # reader/planner 的输出配额必须按**仍有思考**留量(见 MIN_USABLE_OUTPUT)。
         # None = 不传字段 = 模型默认思考(writer 推理任务保留)。
         if reasoning_effort is not None:
             payload["reasoning_effort"] = reasoning_effort

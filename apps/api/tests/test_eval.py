@@ -396,7 +396,7 @@ def test_main_meta_records_resolved_budget_and_guard_snapshot(tmp_path):
     assert b["max_pages"] == config.BUDGET_MAX_PAGES
     assert b["time_budget_s"] == config.BUDGET_TIME_S
     assert meta["writer_max_tokens"] == graph._WRITER_MAX_TOKENS
-    assert meta["budget_guard"] == {"min_usable_output": 1024,
+    assert meta["budget_guard"] == {"min_usable_output": 4096,
                                     "prompt_margin": 512}
     assert meta["only_qids"] == ["fetch_fail"]   # 非全量 → 补跑标记可追溯
 
@@ -454,7 +454,7 @@ def test_latest_baseline_meta_records_config_snapshot():
     assert b["max_pages"] == config.BUDGET_MAX_PAGES
     assert b["time_budget_s"] == config.BUDGET_TIME_S
     assert meta["writer_max_tokens"] == graph._WRITER_MAX_TOKENS
-    assert meta["budget_guard"] == {"min_usable_output": 1024,
+    assert meta["budget_guard"] == {"min_usable_output": 4096,
                                     "prompt_margin": 512}
 
 

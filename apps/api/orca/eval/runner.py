@@ -142,7 +142,10 @@ def _budget_builder_for(q: Question):
     from ..budget import Budget
 
     kwargs = dict(
-        total_llm_tokens=50_000, writer_reserve_tokens=8_000,
+        # 基线一律取 config 默认值(与 cli._make_budget 同源), 避免第二份
+        # 硬编码默认值随预算重校准漂移
+        total_llm_tokens=BUDGET_TOTAL_LLM_TOKENS,
+        writer_reserve_tokens=BUDGET_WRITER_RESERVE_TOKENS,
         max_tavily_credits=BUDGET_MAX_TAVILY_CREDITS,
         max_pages=BUDGET_MAX_PAGES, time_budget_s=BUDGET_TIME_S,
         max_jina_tokens=0)

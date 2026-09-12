@@ -17,11 +17,17 @@ import time
 # (覆盖 tokenization 估计误差与少量系统开销; 中文 1 字 ≈ 1 token 持平,
 # 英文约 4 字符 1 token, 调用方按 len(text) 估算时边际足够)
 PROMPT_MARGIN = 512
-# 最小可用输出阈值: glm-5.3 为推理型, 思考段与正文共享 max_tokens(probe
-# T9), 在线实测思考动辄数千 token——输出配额低于 1024 时连最小思考+最短
-# 正文都放不下, 调用大概率空响应/残缺(c76a8b8 会显式失败), 不值得发起。
-# 各调用点统一判 allowed < MIN_USABLE_OUTPUT → 走程序说明/确定性降级。
-MIN_USABLE_OUTPUT = 1_024
+# 最小可用输出阈值: glm-5.3 / DeepSeek v4 均为推理型, 思考段与正文共享
+# max_tokens(probe T9 / T12), 在线实测思考动辄数千 token——输出配额不足时
+# 连最小思考+最短正文都放不下, 调用大概率空响应/残缺(c76a8b8 会显式失
+# 败), 不值得发起。各调用点统一判 allowed < MIN_USABLE_OUTPUT → 走程序
+# 说明/确定性降级。
+#
+# 定值 4096(probe T12, 2026-09-12 换 DeepSeek 后重校准; glm 时代为 1024):
+# 真实白名单页 docs.python.org/zh-cn/3/whatsnew/3.13.html 实测 completion
+# =3639 才产出 506 字符正文; 同批 using/cmdline.html 在 4096 配额下思考吃到
+# finish=length、正文 0 字符。低于 4096 的配额对 DeepSeek 是纯烧钱。
+MIN_USABLE_OUTPUT = 4_096
 
 
 class ReserveError(RuntimeError):
@@ -123,6 +129,18 @@ class Budget:
             return False
         self.used_credits += n
         return True
+
+    def record_credits(self, n: int) -> None:
+        """事后补记已实际消耗的 credits(不可拒绝)。
+
+        预扣 charge_credits 只能按"预期一次调用"记账;一次搜索实际可能发生
+        多次调用(打空补搜:整轮无白名单命中时补一次限定域名搜索),差额必须
+        如实补记 —— 否则 credits 熔断(§3.6 ≤16)被系统性低算,且终端事件的
+        credits_used 与 DB / `orca cost` 的 tavily_credits 三路口径不一致。
+        与 tokens 的落库前终检同旨:尽力预防在前, 实耗以事实入账, 禁止静默。
+        """
+        if n > 0:
+            self.used_credits += n
 
     def charge_jina(self, tokens: int) -> bool:
         if self.max_jina_tokens <= 0:

@@ -563,3 +563,93 @@ def test_final_adjudicated_annotation_score():
     assert den == fs["denominator"] == 122
     assert num == fs["numerator"] == 100.5
     assert round(num / den, 4) == fs["rate"] == 0.8238
+
+
+# ---- 守门: DeepSeek 时代标注定版分可复算 ------------------------------------
+
+def test_final_adjudicated_annotation_score_deepseek():
+    """守门: 标注 v1(DeepSeek 时代)终审定版分可从断言复算且与 meta 自洽。
+
+    - 21 条 divergences 均有终审 final 字段(已定版, 2026-09-16)
+    - (qid, index, text) 三重匹配不错位; 分歧断言带 final_mark
+    - 分歧断言必须能在 pass2_cross 同 (qid, index) 找到, 且档位与 divergences
+      记录的 pass2 一致(防止 pass1/pass2 两轮标注串轨)
+    - 终审分(mark 取 final_mark, 缺省回退 pass1 mark)复算 =
+      meta.final_score = 122.0/139 ≈ 0.8777(严格口径 quote-only)
+    """
+    import json
+    from pathlib import Path
+
+    W = {"support": 1.0, "partial": 0.5, "not_support": 0.0}
+    C = {"covered": 1.0, "partial": 0.5, "missed": 0.0}
+    base = Path(__file__).resolve().parents[1] / "eval" / "baselines"
+    ann = json.loads(
+        (base / "annotations_20260912_v1.json").read_text(encoding="utf-8"))
+
+    assert ann["meta"]["run_snapshot"] == "run_20260912_195950.json"
+
+    divs = ann["divergences"]
+    assert len(divs) == 21
+    assert all("final" in d and d["final"] in W for d in divs), \
+        "21 条分歧均须有合法的终审 final 字段"
+
+    q_asserts = {q["qid"]: q["assertions"] for q in ann["questions"]}
+    p2_asserts = {q["qid"]: q["assertions"] for q in ann["pass2_cross"]}
+    assert set(q_asserts) == set(p2_asserts), "pass1/pass2 覆盖题集不一致"
+
+    div_keys = set()
+    for d in divs:
+        key = (d["qid"], d["index"])
+        assert key not in div_keys, f"重复的分歧键: {key}"
+        div_keys.add(key)
+        a = q_asserts[d["qid"]][d["index"]]
+        assert a["text"] == d["text"], f"三重匹配错位: {key}"
+        assert a.get("final_mark") == d["final"], \
+            f"questions 断言 final_mark 与裁定不一致: {key}"
+        b = p2_asserts[d["qid"]][d["index"]]
+        assert b["text"] == d["text"], f"pass2_cross 断言错位: {key}"
+        assert b["mark"] == d["pass2"], f"pass2_cross 档位与分歧记录不一致: {key}"
+
+    num = 0.0
+    den = 0
+    for q in ann["questions"]:
+        for a in q["assertions"]:
+            mark = a["final_mark"] if "final_mark" in a else a["mark"]
+            assert mark in W, f"{q['qid']}: 非法档位 {mark!r}"
+            num += W[mark]
+            den += 1
+
+    # pass2 汇总分:上面的逐条比对只覆盖分歧断言,非分歧断言的 pass2 档位
+    # 若无汇总断言则改动无从察觉(变异检验发现的缺口)
+    p2_num = 0.0
+    p2_den = 0
+    for q in ann["pass2_cross"]:
+        for a in q["assertions"]:
+            assert a["mark"] in W, f"{q['qid']}: pass2 非法档位 {a['mark']!r}"
+            p2_num += W[a["mark"]]
+            p2_den += 1
+    assert p2_den == 139
+    assert p2_num == 118.5, "pass2_cross 档位被改动(严格口径分应可复算)"
+
+    cov_num = 0.0
+    cov_den = 0
+    for q in ann["questions"]:
+        for c in q["coverage"]:
+            assert c["mark"] in C, f"{q['qid']}: 非法 coverage 档位"
+            cov_num += C[c["mark"]]
+            cov_den += 1
+
+    fs = ann["meta"]["final_score"]
+    assert fs["caliber"] == "strict(quote-only 终审定版)"
+    assert den == fs["denominator"] == 139
+    assert num == fs["numerator"] == 122.0
+    assert round(num / den, 4) == fs["rate"] == 0.8777
+
+    ac = ann["meta"]["answer_coverage"]
+    assert cov_den == ac["denominator"] == 62
+    assert cov_num == ac["numerator"] == 56.5
+    assert round(cov_num / cov_den, 4) == ac["rate"] == 0.9113
+
+    # 跨时代对比不可静默: 口径敏感性与人口/标注者差异必须随产物落盘
+    assert "caliber_sensitivity" in ann["meta"]
+    assert len(ann["meta"]["comparability_notes"]) >= 4

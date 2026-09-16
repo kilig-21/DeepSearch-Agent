@@ -77,6 +77,28 @@ Phase 2 基线(**glm-5.3 时代**,`run_20260907_010146.json`,2026-09-07):27 任�
 
 Phase 3 来源适配器对照实验(H1,预登记 `apps/api/eval/H1_PREREGISTRATION.md`,N=8 严格口径 quote-only):在 docs.python.org/zh-cn/ 做 1 个来源适配器与纯 Web 基线对照。结论**收缩方向**——断言引用支持率 79.55%→76.19%、答案覆盖率 68.18%→38.64%、证据命中 49→74、平均 LLM tokens +163.6%;核心缺陷=适配器检索相关性不达标(token 子串匹配无 IDF,高频词命中无关页面)。三面定性:零 credits/白名单域名/补纯 Web 盲区为正面,成本劣化与无关证据为负面(N=8 不构成统计证明)。MCP 按裁剪条款降级为路线图。详见 PLAN.md §11 第十轮。
 
+## 测试与验证
+
+后端 `apps/api/tests/`:**23 个测试文件 / 5,622 行 / 281 个测试函数**(pytest 参数化后 **301 个用例**),对应 `orca/` 的 4,380 行源码;前端 `apps/web/tests/`:2 个文件 / 9 个用例(vitest)。
+
+```bash
+cd apps/api && .venv/Scripts/python.exe -m pytest -q   # 301 passed
+cd apps/web && npm test                                # 9 passed
+```
+
+测试比源码多,在这里是**刻意的**——上面"已实现能力"里每一条,都是"没有测试就等于没有"的类型:
+
+| 对外声称 | 由什么证明(节选) |
+|---|---|
+| 引用可核实 | `test_check_report_flags_out_of_range`(编号越界)、`test_degrade_replaces_invalid_citation_without_deleting_claim`(降级不删论点)、`test_revise_report_falls_back_to_degrade`(修订失败兜底)、`test_uncited_evidence_not_in_map` |
+| 两级预算与熔断 | `test_research_calls_cannot_touch_writer_reserve`(研究调用碰不到 writer 预留)、`test_page_budget_fuse`、`test_timeout_by_injected_clock`(注入时钟,不真等 8 分钟)、`test_max_output_tokens_clamps_to_remaining`、`test_min_usable_output_threshold_exported` |
+| 预算"如实标记"而非静默 | `test_usage_snapshot_includes_over_budget`、`test_runner_failed_row_records_nonempty_usage`、`test_writer_stream_settles_known_usage_on_llm_error`(LLM 出错也落账) |
+| 网页注入防护 | `test_safety_flags_canary_leak` / `..._directive_written_as_conclusion` / `..._unauthorized_tool_intent` 三条自动判定,外加 `test_offline_inject_question_runs_and_checks_safety` 走完整链路(离线固定材料,不联网) |
+
+**守门测试**:`tests/test_eval.py` 里有一组测试直接对 `eval/baselines/` 的冻结产物逐字段断言——`test_latest_baseline_full_coverage`(27 题全部完成)、`test_latest_baseline_all_rows_within_budget_cap`(逐行实耗 ≤ 行上限)、`test_final_adjudicated_annotation_score`(glm 时代口径)与 `test_final_adjudicated_annotation_score_deepseek`(当前口径)。**本文档与 PLAN 里的评测数字都能从这些测试复算**:只改产物不改测试会红,只改数字不改产物也会红。
+
+这组守门测试本身做过**变异检验**(人为篡改冻结产物,确认测试确实会失败);其中一个覆盖缺口正是这样被发现的,并已补上 pass2 汇总断言。
+
 ## 安全边界
 
 - 来源白名单硬约束:集合外域名不抓正文(代理与 DNS 异常环境下的局限见 docs/SOURCES.md)

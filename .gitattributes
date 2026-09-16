@@ -1,0 +1,23 @@
+# 行尾:索引内一律 LF,与平台无关
+# 用 eol=lf 显式钉死,不依赖各机器上的 core.autocrlf 设置
+* text=auto eol=lf
+
+# Windows 脚本保留 CRLF(cmd / PowerShell 对 LF 敏感)
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
+
+# 二进制:不做行尾转换,也不参与文本 diff
+*.png   binary
+*.jpg   binary
+*.jpeg  binary
+*.gif   binary
+*.ico   binary
+*.pdf   binary
+*.woff  binary
+*.woff2 binary
+
+# 评测基线快照是机器生成的产物,却占全部已跟踪字节的 97%
+# (19MB JSON vs 425KB Python)。不声明的话 GitHub 语言统计会把本仓库
+# 显示成 JSON 为主 —— 这仓库是 Python/TypeScript 写的。
+apps/api/eval/baselines/*.json linguist-generated=true linguist-vendored=true

@@ -22,7 +22,7 @@ LangGraph 状态图驱动:规划 → 检索 → 阅读 → 证据合并 → 反�
 ```
 apps/api   FastAPI + LangGraph 后端(orca 包:graph/eval/task_manager/cli)
 apps/web   Next.js 15 + React 19 前端(SSE 消费、报告渲染)
-docs       来源白名单(SOURCES.md)、演示脚本
+docs       来源白名单(SOURCES.md)、代表性案例(cases.md)、演示录屏脚本(demo.md)
 ```
 
 链路:`planner → searcher → reader → merger → reflector ─(条件边)→ searcher|writer`;`reflect=False` 时退化为单轮线性链(对比模式)。
@@ -115,5 +115,7 @@ cd apps/web && npm test                                # 9 passed
 
 - `PLAN.md` — 计划书(§0 决策链 / §3 架构 / §10 评测口径)
 - `docs/SOURCES.md` — 来源白名单与许可
+- `docs/cases.md` — 代表性案例:四类终态各一组真实数据,可在快照里逐条复核
+- `docs/demo.md` — 演示录屏脚本(含口播数字速查)
 - `apps/api/docs/probe_results.md` — 组件实测记录
 - `apps/api/eval/baselines/` — 评测运行快照、标注与复核清单

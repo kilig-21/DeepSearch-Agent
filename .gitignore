@@ -3,24 +3,44 @@
 .env.*
 !.env.example
 
+# 密钥形态兜底:私钥落盘多半是事故,宁可误伤也不入库
+*.pem
+*.key
+
 # Python
 __pycache__/
-*.pyc
+*.py[cod]
 .venv/
+venv/
 *.egg-info/
 .pytest_cache/
+
+# Python 工具链缓存(本地跑过即会产生,与是否接入 CI 无关)
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
 
 # Node
 node_modules/
 .next/
 dist/
+build/
+
+# 本地数据(SQLite 库与运行产物;apps/api/data 同样命中)
+data/
 
 # 系统与编辑器
 .DS_Store
 Thumbs.db
 .idea/
 .vscode/
-data/
+*.bak
+*.orig
+*.rej
+*.log
 
 # Claude Code 本地个人配置(权限白名单等,不入库)
 .claude/

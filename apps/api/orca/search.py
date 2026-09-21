@@ -124,12 +124,17 @@ class WhitelistRetrySearch:
         self._allowed = set(allowed_domains)
 
     def search(self, query: str, *, limit: int = 5,
+               allow_extra_credit: Callable[[], bool] | None = None,
                ) -> tuple[list[SearchResult], int]:
         results, credits = self._base.search(query, limit=limit)
         if not results:
             return results, credits
         allowed, _outside = split_by_allowlist(results, self._allowed)
         if allowed:
+            return results, credits
+        # 主搜索的 credit 已由上层预占。补搜是真实的第二次计费调用，必须
+        # 在发出请求前再检查剩余额度；None 保留搜索层独立使用时的旧行为。
+        if allow_extra_credit is not None and not allow_extra_credit():
             return results, credits
         scoped, scoped_credits = self._base.search(
             query, limit=limit, include_domains=sorted(self._allowed))

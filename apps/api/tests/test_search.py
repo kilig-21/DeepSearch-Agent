@@ -173,6 +173,24 @@ def test_whitelist_retry_fires_when_all_results_outside_whitelist():
     assert "https://blog.csdn.net/x/1" in urls
 
 
+def test_whitelist_retry_does_not_exceed_credit_limit():
+    """补搜是第二次计费调用，额度不足时必须在请求发出前停止。"""
+    post = make_post([FakeResponse(200, OUTSIDE_ONLY)])
+    backend = search.WhitelistRetrySearch(
+        search.TavilySearch(api_key="k", post=post),
+        allowed_domains={"docs.python.org"})
+
+    results, credits = backend.search(
+        "q", limit=5, allow_extra_credit=lambda: False)
+
+    assert len(post.calls) == 1
+    assert credits == 1
+    assert [r.url for r in results] == [
+        "https://blog.csdn.net/x/1",
+        "https://zhuanlan.zhihu.com/p/1",
+    ]
+
+
 def test_whitelist_retry_skipped_when_search_returned_nothing():
     """搜索本就 0 结果时不补搜:无证据表明域名限定能救, 不白花 credit。"""
     post = make_post([FakeResponse(200, {"results": []})])

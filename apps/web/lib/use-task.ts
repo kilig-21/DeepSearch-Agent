@@ -94,36 +94,51 @@ export function useTask() {
   const esRef = useRef<EventSource | null>(null);
   const maxSeqRef = useRef(0);
   const closedRef = useRef(false);
+  const activeTaskIdRef = useRef<string | null>(null);
+  const finalAbortRef = useRef<AbortController | null>(null);
+  const startRequestRef = useRef(0);
 
   const close = useCallback(() => {
     esRef.current?.close();
     esRef.current = null;
   }, []);
 
-  const fetchFinalReport = useCallback(async (reportId: number) => {
+  const fetchFinalReport = useCallback(async (reportId: number, taskId: string) => {
+    finalAbortRef.current?.abort();
+    const controller = new AbortController();
+    finalAbortRef.current = controller;
     try {
-      const resp = await fetch(`${API}/api/reports/${reportId}`);
+      const resp = await fetch(`${API}/api/reports/${reportId}`, {
+        signal: controller.signal,
+      });
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
       const detail: ReportDetail = await resp.json();
-      setView((v) => ({
-        ...v,
-        finalReport: detail.final_md,
-        citationMap: detail.citation_map_json ?? {},
-        citationUrls: resolveCitationUrls(detail),
-        finalLoadFailed: false,
-        status: "completed",
-        stopReason: detail.stop_reason,
-      }));
-    } catch {
+      if (activeTaskIdRef.current !== taskId) return;
+      setView((v) => v.taskId !== taskId ? v : ({
+          ...v,
+          finalReport: detail.final_md,
+          citationMap: detail.citation_map_json ?? {},
+          citationUrls: resolveCitationUrls(detail),
+          finalLoadFailed: false,
+          status: "completed",
+          stopReason: detail.stop_reason,
+        }));
+    } catch (error) {
+      if (controller.signal.aborted || activeTaskIdRef.current !== taskId) return;
       // F4:详情拉取失败 → 显示重试入口, 不静默。snapshot 自带正文时
       // 正文仍在(finalReport 非 null), 仅提示引用链接未加载
-      setView((v) => ({ ...v, finalLoadFailed: true }));
+      setView((v) => v.taskId !== taskId ? v : ({
+        ...v, finalLoadFailed: true,
+      }));
+    } finally {
+      if (finalAbortRef.current === controller) finalAbortRef.current = null;
     }
   }, []);
 
   const subscribe = useCallback(
     (taskId: string) => {
       close();
+      activeTaskIdRef.current = taskId;
       closedRef.current = false;
       const es = new EventSource(`${API}/api/research/${taskId}/events`);
       esRef.current = es;
@@ -177,10 +192,12 @@ export function useTask() {
                 next.finalReport = snap.report_md;
                 next.draftReport = "";
                 next.finalLoadFailed = false;
-                if (snap.report_id != null) void fetchFinalReport(snap.report_id);
+                if (snap.report_id != null) {
+                  void fetchFinalReport(snap.report_id, taskId);
+                }
               } else if (snap.report_id != null) {
                 // 终态快照但无正文(如重启后 DB 快照): 拉详情替换
-                void fetchFinalReport(snap.report_id);
+                void fetchFinalReport(snap.report_id, taskId);
               } else {
                 next.draftReport = "";
               }
@@ -256,7 +273,7 @@ export function useTask() {
               next.status = "completed";
               next.stopReason = p.stop_reason;
               next.reportId = p.report_id;
-              void fetchFinalReport(p.report_id);
+              void fetchFinalReport(p.report_id, taskId);
               break;
             }
             case "task_failed": {
@@ -312,52 +329,77 @@ export function useTask() {
 
   const start = useCallback(
     async (topic: string): Promise<string | null> => {
+      const requestNo = ++startRequestRef.current;
+      close();
+      finalAbortRef.current?.abort();
+      finalAbortRef.current = null;
+      activeTaskIdRef.current = null;
       setView({ ...EMPTY, connecting: true });
       maxSeqRef.current = 0;
       sessionStorage.removeItem(TASK_KEY);
-      const resp = await fetch(`${API}/api/research`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ topic }),
-      });
-      if (resp.status === 409) {
-        const err = await resp.json();
-        setView((v) => ({
-          ...v,
-          connecting: false,
-          error: `已有进行中的任务(${err.active_task_id}), 同一时刻只能运行一个`,
-        }));
+      try {
+        const resp = await fetch(`${API}/api/research`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ topic }),
+        });
+        if (requestNo !== startRequestRef.current) return null;
+        if (resp.status === 409) {
+          const err = await resp.json();
+          setView((v) => ({
+            ...v,
+            connecting: false,
+            error: `已有进行中的任务(${err.active_task_id}), 同一时刻只能运行一个`,
+          }));
+          return null;
+        }
+        if (!resp.ok) {
+          setView((v) => ({
+            ...v, connecting: false, error: `创建失败: HTTP ${resp.status}`,
+          }));
+          return null;
+        }
+        const { task_id } = await resp.json();
+        if (requestNo !== startRequestRef.current) return null;
+        activeTaskIdRef.current = task_id;
+        sessionStorage.setItem(TASK_KEY, task_id);
+        subscribe(task_id);
+        return task_id;
+      } catch (error) {
+        if (requestNo === startRequestRef.current) {
+          const detail = error instanceof Error ? error.message : String(error);
+          setView((v) => ({
+            ...v, connecting: false, error: `创建失败: ${detail}`,
+          }));
+        }
         return null;
       }
-      if (!resp.ok) {
-        setView((v) => ({
-          ...v, connecting: false, error: `创建失败: ${resp.status}`,
-        }));
-        return null;
-      }
-      const { task_id } = await resp.json();
-      sessionStorage.setItem(TASK_KEY, task_id);
-      subscribe(task_id);
-      return task_id;
     },
-    [subscribe],
+    [close, subscribe],
   );
 
   const cancel = useCallback(async (): Promise<boolean> => {
     const taskId = view.taskId;
     if (!taskId) return false;
-    const resp = await fetch(`${API}/api/research/${taskId}/cancel`, {
-      method: "POST",
-    });
-    if (resp.status === 202) {
-      setView((v) => ({ ...v, error: null }));
-      return true;
-    }
-    if (resp.status === 409) {
-      setView((v) => ({ ...v, error: "任务已结束, 无需取消" }));
+    try {
+      const resp = await fetch(`${API}/api/research/${taskId}/cancel`, {
+        method: "POST",
+      });
+      if (resp.status === 202) {
+        setView((v) => ({ ...v, error: null }));
+        return true;
+      }
+      if (resp.status === 409) {
+        setView((v) => ({ ...v, error: "任务已结束, 无需取消" }));
+        return false;
+      }
+      setView((v) => ({ ...v, error: `取消失败: HTTP ${resp.status}` }));
+      return false;
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      setView((v) => ({ ...v, error: `取消失败: ${detail}` }));
       return false;
     }
-    return false;
   }, [view.taskId]);
 
   // F4:正式报告详情重试入口(首次失败后由用户触发)
@@ -366,7 +408,7 @@ export function useTask() {
     if (!taskId) return;
     setView((v) => ({ ...v, finalLoadFailed: false }));
     if (view.reportId != null) {
-      await fetchFinalReport(view.reportId);
+      await fetchFinalReport(view.reportId, taskId);
     }
   }, [view.taskId, view.reportId, fetchFinalReport]);
 
@@ -378,7 +420,10 @@ export function useTask() {
       setView((v) => ({ ...v, connecting: true }));
       subscribe(saved);
     }
-    return () => close();
+    return () => {
+      close();
+      finalAbortRef.current?.abort();
+    };
   }, [subscribe, close]);
 
   return { view, start, cancel, close, retryFinalReport };

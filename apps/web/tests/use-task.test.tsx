@@ -260,4 +260,90 @@ describe("useTask(F2 去重与时间线完整性)", () => {
       expect(result.current.view.finalReport).toBe("# 正式报告\n");
     });
   });
+
+  it("创建任务断网时结束连接状态并显示错误", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => {
+      throw new TypeError("Failed to fetch");
+    }));
+    const { result } = renderHook(() => useTask());
+
+    let taskId: string | null = "placeholder";
+    await act(async () => {
+      taskId = await result.current.start("Q");
+    });
+
+    expect(taskId).toBeNull();
+    expect(result.current.view.connecting).toBe(false);
+    expect(result.current.view.error).toContain("创建失败");
+    expect(result.current.view.error).toContain("Failed to fetch");
+    expect(MockEventSource.instances).toHaveLength(0);
+  });
+
+  it("旧任务的报告详情晚到时不会覆盖新任务", async () => {
+    let createCount = 0;
+    let resolveOldDetail!: (response: Response) => void;
+    const oldDetail = new Promise<Response>((resolve) => {
+      resolveOldDetail = resolve;
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.endsWith("/api/research")) {
+          createCount += 1;
+          return okJson({ task_id: createCount === 1 ? "task_a" : "task_b" });
+        }
+        if (url.includes("/api/reports/9")) return await oldDetail;
+        throw new Error(`unexpected fetch ${url}`);
+      }),
+    );
+    const { result } = renderHook(() => useTask());
+
+    await act(async () => { await result.current.start("A"); });
+    act(() => {
+      lastEs().emit("done", 1, {
+        report_id: 9, stop_reason: "single_pass", ts: "t1",
+      });
+    });
+    await act(async () => { await result.current.start("B"); });
+    act(() => {
+      lastEs().emit("snapshot", 0, {
+        task_id: "task_b", status: "running", stop_reason: null,
+        report_id: null, round_no: 0, sub_questions: [],
+        progress: { sources_read: 0, evidence_count: 0 },
+        report_md: "", citation_map: {}, seq: 0,
+      });
+    });
+    await act(async () => {
+      resolveOldDetail(okJson(REPORT_DETAIL));
+      await oldDetail;
+    });
+
+    expect(result.current.view.taskId).toBe("task_b");
+    expect(result.current.view.status).toBe("running");
+    expect(result.current.view.finalReport).toBeNull();
+  });
+
+  it("取消请求断网时返回失败并显示错误", async () => {
+    const { result } = renderHook(() => useTask());
+    await act(async () => { await result.current.start("Q"); });
+    act(() => {
+      lastEs().emit("snapshot", 0, {
+        task_id: "t_test", status: "running", stop_reason: null,
+        report_id: null, round_no: 0, sub_questions: [],
+        progress: { sources_read: 0, evidence_count: 0 },
+        report_md: "", citation_map: {}, seq: 0,
+      });
+    });
+    vi.stubGlobal("fetch", vi.fn(async () => {
+      throw new TypeError("Failed to fetch");
+    }));
+
+    let cancelled = true;
+    await act(async () => { cancelled = await result.current.cancel(); });
+
+    expect(cancelled).toBe(false);
+    expect(result.current.view.error).toContain("取消失败");
+    expect(result.current.view.error).toContain("Failed to fetch");
+  });
 });

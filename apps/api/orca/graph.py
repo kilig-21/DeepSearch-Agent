@@ -506,6 +506,18 @@ _REASON_TEXT = {
 
 def make_writer(tools: GraphTools):
     def writer(state: ResearchState) -> dict:
+        def timeout_result() -> dict:
+            """丢弃超时后才完成的模型正文，并用确定性说明替换流式草稿。"""
+            note = _program_note(state, _REASON_TEXT["timeout"])
+            tools.emit("warning", {
+                "stage": "writer",
+                "detail": "写作过程中达到任务总时限, 已停止并丢弃未完成正文",
+            })
+            tools.emit("report_delta",
+                       {"md": note, "draft": True, "replace": True})
+            return {"report_md": note, "citation_map": {},
+                    "stop_reason": "timeout"}
+
         stop = _control_stop(state, tools.budget)
         evidence = state.get("evidence", [])
         if stop:
@@ -556,8 +568,14 @@ def make_writer(tools: GraphTools):
             gen, usage_box = tools.llm_chat_stream(
                 messages, max_tokens=allowed, tier="high_quality")
             pieces: list[str] = []
+            timed_out = False
             try:
                 for piece in gen:
+                    # 流式请求的传输超时只约束相邻数据间隔，不能保证整个
+                    # 调用落在任务总时限内；每个片段都要检查任务截止时间。
+                    if tools.budget.out_of_time():
+                        timed_out = True
+                        break
                     pieces.append(piece)
                     tools.emit("report_delta", {"md": piece, "draft": True})
             except Exception:
@@ -574,6 +592,8 @@ def make_writer(tools: GraphTools):
                 gen.close()
             tools.budget.settle_llm(usage_box.get("total_tokens", 0),
                                     for_writer=True)
+            if timed_out or tools.budget.out_of_time():
+                return timeout_result()
             content = "".join(pieces)
             streamed = True
         else:
@@ -581,6 +601,10 @@ def make_writer(tools: GraphTools):
                                     tier="high_quality")
             tools.budget.settle_llm(result.usage.get("total_tokens", 0),
                                     for_writer=True)
+            # 非流式 HTTP 调用无法中途撤回；返回后必须重新检查总时限，
+            # 防止把截止时间之后才得到的报告标成正常完成。
+            if tools.budget.out_of_time():
+                return timeout_result()
             if not result.content.strip():
                 # R3: 非流式空正文与流式空内容同口径显式失败(c76a8b8),
                 # 交由 TaskManager 转 task_failed, 不允许空报告落库;
@@ -616,6 +640,8 @@ def make_writer(tools: GraphTools):
                 if usage_extra:
                     tools.budget.settle_llm(
                         usage_extra.get("total_tokens", 0), for_writer=True)
+                if tools.budget.out_of_time():
+                    return timeout_result()
             # 修订正文与已发草稿不一致 → replace 帧让前端整体替换草稿
             tools.emit("report_delta",
                        {"md": final, "draft": True, "replace": True})

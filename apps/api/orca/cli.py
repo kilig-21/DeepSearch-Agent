@@ -53,7 +53,9 @@ def default_tools_builder(budget: Budget) -> GraphTools:
                                   allowed_domains=ALLOWED_DOMAINS)
 
     def search_fn(query: str, *, limit: int):
-        return tavily.search(query, limit=limit)
+        return tavily.search(
+            query, limit=limit,
+            allow_extra_credit=lambda: budget.can_charge_credits(1))
 
     async def fetch_async(url: str, *, allowed_domains=None, proxy=None):
         return await fetch_and_extract_async(

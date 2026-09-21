@@ -130,6 +130,14 @@ class Budget:
         self.used_credits += n
         return True
 
+    def can_charge_credits(self, n: int) -> bool:
+        """只检查下一次搜索是否仍在额度内，不提前记账。
+
+        供一次逻辑搜索内部可能发生的补搜使用；真实消耗仍由调用方在搜索
+        完成后统一对账，避免检查和事后记账把同一次调用计算两遍。
+        """
+        return self.used_credits + n <= self.max_tavily_credits
+
     def record_credits(self, n: int) -> None:
         """事后补记已实际消耗的 credits(不可拒绝)。
 

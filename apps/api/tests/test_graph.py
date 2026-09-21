@@ -602,6 +602,60 @@ def test_writer_node_skips_call_when_remaining_below_min():
     assert "程序生成" in out["report_md"]
 
 
+def test_writer_stream_stops_when_total_time_expires():
+    """writer 流式传输可持续很久，达到任务截止时间后须丢弃半截正文。"""
+    now = [0.0]
+    b = make_budget(time_s=1.0, clock=lambda: now[0])
+    tools, events, _calls = make_tools([], budget=b)
+
+    def stream(_messages, *, max_tokens, tier):
+        usage_box = {}
+
+        def chunks():
+            yield "# 半截报告\n"
+            now[0] = 2.0
+            yield "截止时间后的内容 [1]"
+
+        return chunks(), usage_box
+
+    tools.llm_chat_stream = stream
+    out = graph.make_writer(tools)({
+        "topic": "Q", "evidence": [_ev()],
+        "pending_links": [], "stop_reason": "evidence_sufficient",
+    })
+
+    assert out["stop_reason"] == "timeout"
+    assert "研究未能完成" in out["report_md"]
+    deltas = [p for e, p in events if e == "report_delta"]
+    assert deltas[0]["md"] == "# 半截报告\n"
+    assert deltas[-1]["replace"] is True
+    assert deltas[-1]["md"] == out["report_md"]
+
+
+def test_writer_non_stream_discards_report_returned_after_deadline():
+    """非流式调用无法中途取消，返回后超时也不得标成正常完成。"""
+    now = [0.0]
+    b = make_budget(time_s=1.0, clock=lambda: now[0])
+    tools, events, _calls = make_tools([WRITER_REPORT], budget=b)
+    original_chat = tools.llm_chat
+
+    def slow_chat(*args, **kwargs):
+        result = original_chat(*args, **kwargs)
+        now[0] = 2.0
+        return result
+
+    tools.llm_chat = slow_chat
+    out = graph.make_writer(tools)({
+        "topic": "Q", "evidence": [_ev()],
+        "pending_links": [], "stop_reason": "evidence_sufficient",
+    })
+
+    assert out["stop_reason"] == "timeout"
+    assert WRITER_REPORT not in out["report_md"]
+    assert any(e == "report_delta" and p.get("replace") is True
+               for e, p in events)
+
+
 def test_reader_skips_summary_when_remaining_below_min():
     """节点级:页面已抓取但剩余额度不足以摘要 → 不调用, warning 跳页,
     已有候选证据保留。"""

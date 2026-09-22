@@ -59,6 +59,23 @@ describe("ReportView", () => {
     expect(globalThis.fetch).not.toHaveBeenCalled();
   });
 
+  it("代码示例与已有链接不受引用替换影响，三位数引用可打开", () => {
+    const { container } = render(<ReportView
+      markdown={'正文 [100]，代码 `items[1]`。\n\n```python\nitems[1]\n```\n\n[1](https://existing.example/)'}
+      citationUrls={{ "1": "https://source.example/a", "100": "https://source.example/(section)" }}
+    />);
+    expect(Array.from(container.querySelectorAll("code")).map((node) => node.textContent)).toEqual(["items[1]", "items[1]\n"]);
+    expect(container.querySelector('.report-prose a[href="https://existing.example/"]')).not.toBeNull();
+    expect(container.querySelector('.report-prose a[href="https://source.example/(section)"]')).not.toBeNull();
+    expect(container.querySelector('.report-prose a[href="https://source.example/a"]')).toBeNull();
+  });
+
+  it("无效来源 URL 不会成为正文或来源列表中的链接", () => {
+    const { container } = render(<ReportView markdown="依据 [1] [2]" citationUrls={{ "1": "javascript:alert(1)", "2": "not a URL" }} />);
+    expect(container.querySelectorAll("a")).toHaveLength(0);
+    expect(container.textContent).toContain("依据 [1] [2]");
+  });
+
   it("img 三条路径全部剔除且零网络请求(远程图片不加载)", () => {
     const { container } = render(
       <ReportView

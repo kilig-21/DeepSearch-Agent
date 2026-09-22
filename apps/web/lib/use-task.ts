@@ -36,9 +36,11 @@ import { resolveCitationUrls } from "./citations";
 
 const API = process.env.NEXT_PUBLIC_API_BASE ?? "http://localhost:8000";
 const TASK_KEY = "orca.task_id";
+const TOPIC_KEY = "orca.task_topic";
 
 export interface TaskView {
   taskId: string | null;
+  topic: string;
   status: TaskStatus | null;
   stopReason: string | null;
   reportId: number | null;
@@ -71,6 +73,7 @@ function appendTimeline(
 // 联查真实 URL, 绝不把 evidence_id 当 href
 const EMPTY: TaskView = {
   taskId: null,
+  topic: "",
   status: null,
   stopReason: null,
   reportId: null,
@@ -116,6 +119,8 @@ export function useTask() {
       if (activeTaskIdRef.current !== taskId) return;
       setView((v) => v.taskId !== taskId ? v : ({
           ...v,
+          topic: detail.topic,
+          sources: detail.sources ?? [],
           finalReport: detail.final_md,
           citationMap: detail.citation_map_json ?? {},
           citationUrls: resolveCitationUrls(detail),
@@ -144,6 +149,7 @@ export function useTask() {
       esRef.current = es;
 
       const handleEvent = (name: string, ev: MessageEvent) => {
+        if (esRef.current !== es) return;
         // F2:序号一律读 lastEventId(服务端 id: 字段), 不信任 payload;
         // 在任何视图更新之前统一过滤重复/过期序号。
         const seq = Number.parseInt(ev.lastEventId ?? "", 10);
@@ -160,7 +166,7 @@ export function useTask() {
         const ts: string = data.ts ?? new Date().toISOString();
 
         setView((v) => {
-          const next = { ...v, taskId };
+          const next = { ...v, taskId, connecting: false };
           switch (name) {
             case "snapshot": {
               const snap = data as Snapshot;
@@ -180,9 +186,9 @@ export function useTask() {
                   {
                     seq: snap.seq,
                     kind: "plan",
-                    text: `快照恢复: 已进行到第 ${snap.round_no} 轮,` +
+                    text: `已恢复进度：第 ${snap.round_no} 轮，` +
                       `读过 ${snap.progress.sources_read} 个来源,` +
-                      `沉淀 ${snap.progress.evidence_count} 条要点`,
+                      `收集 ${snap.progress.evidence_count} 条证据`,
                     ts: snap.ts ?? ts,
                   },
                 ];
@@ -249,9 +255,17 @@ export function useTask() {
               break;
             }
             case "reflection": {
+              const queries = Array.isArray(data.next_queries)
+                ? data.next_queries.filter((query: unknown) => typeof query === "string")
+                : [];
               next.timeline = appendTimeline(v.timeline, {
                 seq, kind: "reflection", ts,
-                text: "反思: " + JSON.stringify(data),
+                text: data.sufficient
+                  ? "资料已足够，开始整理报告"
+                  : data.decision === "continue"
+                    ? `继续补充资料，新增 ${queries.length} 个搜索方向`
+                    : "本轮检查已完成",
+                detail: queries.join("\n") || undefined,
               });
               break;
             }
@@ -318,11 +332,13 @@ export function useTask() {
       }
       es.onerror = () => {
         // 浏览器自动重连(带 Last-Event-ID); 断开只影响订阅, 不取消任务
-        if (!closedRef.current) {
+        if (esRef.current === es && !closedRef.current) {
           setView((v) => ({ ...v, connecting: true }));
         }
       };
-      es.onopen = () => setView((v) => ({ ...v, connecting: false }));
+      es.onopen = () => {
+        if (esRef.current === es) setView((v) => ({ ...v, connecting: false }));
+      };
     },
     [close, fetchFinalReport],
   );
@@ -337,6 +353,7 @@ export function useTask() {
       setView({ ...EMPTY, connecting: true });
       maxSeqRef.current = 0;
       sessionStorage.removeItem(TASK_KEY);
+      sessionStorage.removeItem(TOPIC_KEY);
       try {
         const resp = await fetch(`${API}/api/research`, {
           method: "POST",
@@ -363,6 +380,17 @@ export function useTask() {
         if (requestNo !== startRequestRef.current) return null;
         activeTaskIdRef.current = task_id;
         sessionStorage.setItem(TASK_KEY, task_id);
+        sessionStorage.setItem(TOPIC_KEY, topic);
+        // POST 成功后立即进入任务视图，不等待 SSE 的首帧。这样即使连接
+        // 已打开但 snapshot 还没到，也不会短暂退回可重复提交的表单。
+        setView((v) => ({
+          ...v,
+          taskId: task_id,
+          topic,
+          status: "running",
+          connecting: true,
+          error: null,
+        }));
         subscribe(task_id);
         return task_id;
       } catch (error) {
@@ -417,7 +445,12 @@ export function useTask() {
   useEffect(() => {
     const saved = sessionStorage.getItem(TASK_KEY);
     if (saved && !esRef.current) {
-      setView((v) => ({ ...v, connecting: true }));
+      setView((v) => ({
+        ...v,
+        taskId: saved,
+        topic: sessionStorage.getItem(TOPIC_KEY) ?? "",
+        connecting: true,
+      }));
       subscribe(saved);
     }
     return () => {
@@ -426,5 +459,17 @@ export function useTask() {
     };
   }, [subscribe, close]);
 
-  return { view, start, cancel, close, retryFinalReport };
+  const reset = useCallback(() => {
+    if (view.taskId && (view.status === null || !isTerminal(view.status))) return;
+    ++startRequestRef.current;
+    close();
+    finalAbortRef.current?.abort();
+    activeTaskIdRef.current = null;
+    maxSeqRef.current = 0;
+    sessionStorage.removeItem(TASK_KEY);
+    sessionStorage.removeItem(TOPIC_KEY);
+    setView(EMPTY);
+  }, [view.taskId, view.status, close]);
+
+  return { view, start, cancel, close, retryFinalReport, reset };
 }

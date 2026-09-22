@@ -1,87 +1,128 @@
 "use client";
 
-// 报告渲染(计划书 §7;第四轮评审 F1/F3):
-// - Markdown 过 rehype-sanitize:schema 基于 defaultSchema 改写(禁脚本/
-//   事件属性, tagNames 剔除 img → 远程图片零网络请求)
-// - 引用 [n] 预处理为 [n](真实 URL)链接。citationUrls 由 hook 经详情
-//   数据 evidences.source_id → sources 联查得到;绝不把 evidence_id 当 href。
-//   citationUrls 缺失的编号保持纯文本(草稿阶段)
+import { useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
 
-// F1:schema 传参修正 —— tagNames 是字符串允许列表(不是 {img: null} 对象),
-// 类型错误曾导致渲染抛 TypeError。默认 schema 允许 img, 显式剔除。
 const sanitizeSchema = {
   ...defaultSchema,
   tagNames: (defaultSchema.tagNames ?? []).filter((tag) => tag !== "img"),
-  attributes: {
-    ...defaultSchema.attributes,
-    a: [...(defaultSchema.attributes?.a ?? []), "target", "rel"],
-  },
 };
+
+type MarkdownNode = {
+  type: string;
+  value?: string;
+  url?: string;
+  children?: MarkdownNode[];
+};
+
+function safeSourceUrl(value: string) {
+  try {
+    const url = new URL(value);
+    return ["http:", "https:"].includes(url.protocol) ? value : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+// Transform citation text, while preserving code and existing Markdown links.
+// Construct link nodes so source URLs are never interpreted as Markdown syntax.
+function remarkCitations(urls: Record<string, string>) {
+  return (tree: MarkdownNode) => {
+    const visit = (node: MarkdownNode) => {
+      if (!node.children || ["link", "linkReference", "code", "inlineCode"].includes(node.type)) return;
+      node.children = node.children.flatMap((child) => {
+        if (child.type !== "text" || !child.value) {
+          visit(child);
+          return [child];
+        }
+        const parts: MarkdownNode[] = [];
+        let offset = 0;
+        for (const match of child.value.matchAll(/\[(\d+)\]/g)) {
+          const url = safeSourceUrl(urls[match[1]] ?? "");
+          if (!url) continue;
+          if (match.index > offset) parts.push({ type: "text", value: child.value.slice(offset, match.index) });
+          parts.push({ type: "link", url, children: [{ type: "text", value: `[${match[1]}]` }] });
+          offset = match.index + match[0].length;
+        }
+        if (!parts.length) return [child];
+        if (offset < child.value.length) parts.push({ type: "text", value: child.value.slice(offset) });
+        return parts;
+      });
+    };
+    visit(tree);
+  };
+}
 
 export function ReportView({
   markdown,
   citationUrls,
+  sources = [],
   title,
+  copyable = true,
 }: {
   markdown: string;
   citationUrls: Record<string, string>;
+  sources?: { url: string; title: string }[];
   title?: string;
+  copyable?: boolean;
 }) {
+  const [copyState, setCopyState] = useState<"idle" | "copied" | "failed">("idle");
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => { if (timer.current) clearTimeout(timer.current); }, []);
+
   if (!markdown) return null;
+  const cited = Object.entries(citationUrls)
+    .filter(([, url]) => safeSourceUrl(url))
+    .sort(([a], [b]) => Number(a) - Number(b));
+  const sourceTitles = new Map(sources.map((source) => [source.url, source.title]));
 
-  // [1] / [1][2] → [1](url)。仅替换尚未带链接的引用标记;真实 URL
-  // 联查不到的编号保持纯文本, 不伪造链接。
-  const withLinks = markdown.replace(
-    /\[(\d{1,2})\](?!\()/g,
-    (m, n: string) => {
-      const url = citationUrls[n];
-      return url ? `[${n}](${url})` : m;
-    },
-  );
-
-  const cited = Object.entries(citationUrls);
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(markdown);
+      setCopyState("copied");
+    } catch {
+      setCopyState("failed");
+    }
+    if (timer.current) clearTimeout(timer.current);
+    timer.current = setTimeout(() => setCopyState("idle"), 3000);
+  };
 
   return (
-    <div className="space-y-4">
-      {title ? <h2 className="text-xl font-semibold">{title}</h2> : null}
-      <div className="max-w-none break-words text-sm leading-6 [&_h1]:mb-2 [&_h1]:mt-4 [&_h1]:text-lg [&_h1]:font-bold [&_h2]:mb-2 [&_h2]:mt-4 [&_h2]:text-base [&_h2]:font-bold [&_h3]:mb-1 [&_h3]:mt-3 [&_h3]:font-semibold [&_li]:ml-5 [&_li]:list-disc [&_ol_li]:ml-6 [&_ol_li]:list-decimal [&_p]:my-2 [&_table]:my-2 [&_table]:w-full [&_th]:border [&_th]:px-2 [&_th]:py-1 [&_td]:border [&_td]:px-2 [&_td]:py-1 [&_blockquote]:border-l-4 [&_blockquote]:border-gray-300 [&_blockquote]:pl-3 [&_blockquote]:text-gray-600 [&_code]:rounded [&_code]:bg-gray-100 [&_code]:px-1">
+    <article className="report-reader">
+      {title || copyable ? <div className="reader-heading">
+        {title ? <h2>{title}</h2> : <span>研究报告</span>}
+        {copyable ? <button type="button" className="reader-copy" onClick={() => void copy()} aria-label="复制 Markdown 正文">
+          {copyState === "copied" ? "已复制" : "复制正文"}
+        </button> : null}
+      </div> : null}
+      <span className="reader-copy-status" role="status">{copyState === "copied" ? "正文已复制" : copyState === "failed" ? "无法访问剪贴板，请选择正文手动复制。" : ""}</span>
+      <div className="report-prose">
         <ReactMarkdown
-          remarkPlugins={[remarkGfm]}
+          remarkPlugins={[remarkGfm, [remarkCitations, citationUrls]]}
           rehypePlugins={[[rehypeSanitize, sanitizeSchema]]}
           components={{
-            a: ({ href, children }) => (
-              <a href={href} target="_blank" rel="noopener noreferrer">
-                {children}
-              </a>
-            ),
+            a: ({ href, children }) => <a href={href} target="_blank" rel="noopener noreferrer">{children}</a>,
+            table: ({ children }) => <div className="report-table-scroll" role="region" aria-label="报告表格，可横向滚动" tabIndex={0}><table>{children}</table></div>,
           }}
         >
-          {withLinks}
+          {markdown}
         </ReactMarkdown>
       </div>
-      {cited.length > 0 ? (
-        <div>
-          <h3 className="mb-1 text-sm font-semibold text-gray-700">引用来源</h3>
-          <ol className="list-decimal space-y-0.5 pl-5 text-xs">
-            {cited.map(([n, url]) => (
-              <li key={n} className="break-all">
-                <span className="mr-1 font-medium">[{n}]</span>
-                <a
-                  className="text-blue-600 hover:underline"
-                  href={url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                >
-                  {url}
-                </a>
-              </li>
-            ))}
-          </ol>
-        </div>
-      ) : null}
-    </div>
+      {cited.length > 0 ? <section className="citation-section" aria-label="引用来源">
+        <div className="citation-heading"><h3>引用来源</h3><span>{cited.length} 条引用</span></div>
+        <ol className="citation-list">
+          {cited.map(([number, url]) => <li key={number}>
+            <span className="citation-number">[{number}]</span>
+            <a href={url} target="_blank" rel="noopener noreferrer">
+              <strong>{sourceTitles.get(url) || new URL(url).hostname}</strong>
+              <span>{url}</span>
+            </a>
+            <span className="citation-arrow" aria-hidden="true">↗</span>
+          </li>)}
+        </ol>
+      </section> : null}
+    </article>
   );
 }

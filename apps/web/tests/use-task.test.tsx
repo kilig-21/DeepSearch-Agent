@@ -279,6 +279,70 @@ describe("useTask(F2 去重与时间线完整性)", () => {
     expect(MockEventSource.instances).toHaveLength(0);
   });
 
+  it("刷新后在首帧前保留任务与题目，终态快照解除连接状态", async () => {
+    sessionStorage.setItem("orca.task_id", "t_saved");
+    sessionStorage.setItem("orca.task_topic", "刷新后应保留的问题");
+    const { result } = renderHook(() => useTask());
+    expect(result.current.view.taskId).toBe("t_saved");
+    expect(result.current.view.topic).toBe("刷新后应保留的问题");
+    expect(result.current.view.connecting).toBe(true);
+    act(() => lastEs().emit("snapshot", 1, {
+      status: "interrupted", stop_reason: "interrupted", report_id: null,
+      round_no: 1, sub_questions: [], progress: { sources_read: 1, evidence_count: 0 },
+      report_md: "", citation_map: {}, seq: 1,
+    }));
+    expect(result.current.view.connecting).toBe(false);
+    act(() => result.current.reset());
+    expect(result.current.view.taskId).toBeNull();
+    expect(sessionStorage.getItem("orca.task_topic")).toBeNull();
+  });
+
+  it("离开的旧 SSE 连接晚到的事件不会把新界面改回旧任务", async () => {
+    const { result } = renderHook(() => useTask());
+    await act(async () => { await result.current.start("Q"); });
+    const oldConnection = lastEs();
+    act(() => oldConnection.emit("cancelled", 1, { stop_reason: "cancelled" }));
+    act(() => result.current.reset());
+    act(() => {
+      oldConnection.emit("note", 2, { point: "旧资料", title: "旧标题" });
+      oldConnection.onerror?.();
+    });
+    expect(result.current.view.taskId).toBeNull();
+    expect(result.current.view.timeline).toEqual([]);
+    expect(result.current.view.connecting).toBe(false);
+  });
+
+  it("POST 成功后立即锁定为运行中，不等待 SSE 首帧", async () => {
+    const { result } = renderHook(() => useTask());
+
+    await act(async () => {
+      await result.current.start("Q");
+    });
+
+    expect(result.current.view.taskId).toBe("t_test");
+    expect(result.current.view.status).toBe("running");
+    expect(result.current.view.connecting).toBe(true);
+    expect(sessionStorage.getItem("orca.task_id")).toBe("t_test");
+  });
+
+  it("终态任务可以清空并开始下一项研究", async () => {
+    const { result } = renderHook(() => useTask());
+    await act(async () => { await result.current.start("Q"); });
+    act(() => {
+      lastEs().emit("cancelled", 1, {
+        stop_reason: "cancelled_by_user",
+        ts: "t1",
+      });
+    });
+
+    act(() => result.current.reset());
+
+    expect(result.current.view.taskId).toBeNull();
+    expect(result.current.view.status).toBeNull();
+    expect(result.current.view.timeline).toEqual([]);
+    expect(sessionStorage.getItem("orca.task_id")).toBeNull();
+  });
+
   it("旧任务的报告详情晚到时不会覆盖新任务", async () => {
     let createCount = 0;
     let resolveOldDetail!: (response: Response) => void;

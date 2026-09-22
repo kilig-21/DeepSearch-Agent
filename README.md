@@ -1,4 +1,4 @@
-# Orca Research
+# DeepSearch
 
 白名单来源、逐条引用可核实、超限即熔断且停止原因可追溯的 Deep Search 研究助手。
 

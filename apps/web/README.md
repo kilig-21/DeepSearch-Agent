@@ -1,4 +1,4 @@
-# apps/web — Orca Research 前端(Phase 1B)
+# apps/web — DeepSearch 前端(Phase 1B)
 
 Next.js 15(App Router)+ Tailwind CSS v4。逻辑正确优先,不追求美观。
 

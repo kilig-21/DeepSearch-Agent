@@ -115,7 +115,7 @@ export default function HistoryPage() {
     <main className="history-page">
       <header className="history-header">
         <div>
-          <p className="eyebrow">Orca Research</p>
+          <p className="eyebrow">DeepSearch</p>
           <h1>{detail ? "报告详情" : "历史报告"}</h1>
         </div>
         <div className="history-actions">

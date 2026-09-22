@@ -1,1 +1,1 @@
-"""Orca Research 核心包。"""
+"""DeepSearch 核心包。"""

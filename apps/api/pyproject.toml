@@ -1,7 +1,7 @@
 [project]
 name = "orca-api"
 version = "0.1.0"
-description = "Orca Research 后端:Deep Search 研究助手(FastAPI + LangGraph)"
+description = "DeepSearch 后端:Deep Search 研究助手(FastAPI + LangGraph)"
 requires-python = ">=3.12"
 dependencies = [
     "httpx>=0.27",

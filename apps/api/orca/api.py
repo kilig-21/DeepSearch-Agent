@@ -47,7 +47,7 @@ def create_app(*, db_path=None, tools_builder=None, budget_builder=None,
         manager.recover_interrupted()  # 启动时遗留 running → interrupted(§3.4)
         yield
 
-    app = FastAPI(title="Orca Research", lifespan=lifespan)
+    app = FastAPI(title="DeepSearch", lifespan=lifespan)
     app.add_middleware(
         CORSMiddleware, allow_origins=CORS_ORIGINS,
         allow_methods=["*"], allow_headers=["*"])

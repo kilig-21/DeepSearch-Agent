@@ -83,7 +83,7 @@ export default function ResearchPage() {
 
   return <main className={`workbench-shell ${hasResearch ? "workbench-running" : "workbench-ready"}`}>
     <aside className="app-rail">
-      <Link href="/" className="brand-lockup" aria-label="Orca Research 首页">Orca Research</Link>
+      <Link href="/" className="brand-lockup" aria-label="DeepSearch 首页">DeepSearch</Link>
       <button type="button" className="new-research" disabled={busy} onClick={newResearch}>新建研究</button>
       <nav className="rail-nav" aria-label="主导航"><Link className="rail-link rail-link-active" href="/" aria-current="page">研究工作台</Link><Link className="rail-link" href="/history">历史报告</Link></nav>
       <div className="rail-context"><p className="rail-label">研究范围</p><p>仅抓取白名单来源<br />预算由服务端配置</p></div>

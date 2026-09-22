@@ -281,7 +281,7 @@ def build_results_table(rows: list[dict]) -> str:
     total = len(rows)
     failed = sum(1 for r in rows if r["status"] != "completed")
     lines = [
-        "# Orca 评测结果表(§10.2 口径)",
+        "# DeepSearch 评测结果表(§10.2 口径)",
         "",
         f"- 总任务数: {total}",
         f"- 失败率: {failed / total * 100:.1f}%(分母=全部任务, §10.4)",

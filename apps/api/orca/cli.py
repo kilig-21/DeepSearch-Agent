@@ -190,7 +190,7 @@ def main(argv=None) -> int:
         if hasattr(stream, "reconfigure"):
             stream.reconfigure(encoding="utf-8", errors="replace")
     parser = argparse.ArgumentParser(prog="orca",
-                                     description="Orca Research(Deep Search 研究助手)")
+                                     description="DeepSearch(Deep Search 研究助手)")
     sub = parser.add_subparsers(dest="command", required=True)
 
     p_research = sub.add_parser("research", help="执行一次研究任务")

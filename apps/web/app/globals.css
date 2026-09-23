@@ -141,6 +141,27 @@ input { font:inherit; }
 .stage-header { flex-wrap:wrap; }
 .report-paper { overflow-wrap:anywhere; }
 .report-paper pre,.history-detail pre { overflow:auto; max-width:100%; }
+
+/* The workbench keeps one calm surface when no live report is open. */
+.workbench-ready .research-stage { max-width:none; padding-right:clamp(28px,4vw,64px); }
+.app-rail, .research-stage { border-radius:0; }
+body { font-family:"PingFang SC","Microsoft YaHei","Noto Sans SC",Arial,sans-serif; }
+.brand-lockup { font-family:"Iowan Old Style","Songti SC","STSong",serif; }
+.stage-header h1, .quick-start h2, .ledger-heading h2 { font-family:"PingFang SC","Microsoft YaHei","Noto Sans SC",Arial,sans-serif; font-weight:650; letter-spacing:-.8px; }
+.question-composer { border-radius:14px; padding:22px 24px 16px; box-shadow:0 12px 28px rgba(26,35,32,.05); }
+.question-composer textarea { font-family:"PingFang SC","Microsoft YaHei","Noto Sans SC",Arial,sans-serif; font-size:17px; }
+.new-research, .quick-prompt-list button, .start-action, .quiet-action, .reader-copy, .history-filters input, .history-error button { border-radius:10px; }
+.rail-link { width:100%; border-left:0; background:transparent; text-align:left; font:inherit; cursor:pointer; }
+.rail-link-active { border-left:3px solid #89b6a8; }
+.quick-prompt-list button { padding:14px; }
+.recent-report-list button { display:flex; width:100%; align-items:center; justify-content:space-between; gap:20px; padding:16px 0; border:0; border-bottom:1px solid var(--line); background:transparent; color:var(--ink); text-align:left; }
+.recent-report-list button:hover { color:#286c60; }
+.section-row button { border:0; padding:0; background:transparent; color:#286c60; font-size:13px; }
+.inline-archive { max-width:960px; margin-top:34px; }
+.archive-list-heading, .archive-toolbar { display:flex; align-items:center; justify-content:space-between; gap:16px; padding-bottom:16px; border-bottom:1px solid var(--line); }
+.archive-list-heading h2 { margin:0; font-size:17px; font-weight:650; }.archive-list-heading span { color:var(--muted-ink); font-size:12px; }
+.inline-report-list { display:grid; gap:10px; margin-top:18px; }.inline-report-list button { display:flex; align-items:center; justify-content:space-between; gap:18px; width:100%; border:1px solid #d7ddd8; border-radius:12px; padding:16px 18px; background:rgba(255,255,252,.75); text-align:left; transition:border-color .18s ease, box-shadow .18s ease, transform .18s ease; }.inline-report-list button:hover:not(:disabled) { border-color:#92b0a6; box-shadow:0 8px 20px rgba(26,35,32,.05); transform:translateY(-1px); }.inline-report-list strong,.inline-report-list small { display:block; }.inline-report-list strong { color:#26312d; font-size:14px; font-weight:650; }.inline-report-list small { margin-top:6px; color:#727d77; font-size:12px; }.inline-report-list em { flex-shrink:0; color:#2e786c; font-size:12px; font-style:normal; }.archive-empty { color:var(--muted-ink); font-size:14px; }.archive-summary { display:grid; grid-template-columns:repeat(3,1fr); gap:12px; margin:20px 0; }.archive-summary div { padding:13px 15px; border-radius:10px; background:#e9eeea; }.archive-summary dt { color:#73807a; font-size:11px; }.archive-summary dd { margin:5px 0 0; color:#2c3732; font-size:13px; }.archive-paper { border:1px solid #dce2dc; border-radius:14px; padding:clamp(24px,4vw,48px); background:var(--paper); box-shadow:0 12px 30px rgba(26,35,32,.04); }
+@media (max-width:560px) { .question-composer { padding:18px; border-radius:12px; }.archive-summary { grid-template-columns:1fr; }.archive-paper { padding:24px 18px; border-radius:12px; }.inline-report-list button { align-items:flex-start; }.inline-report-list em { display:none; } }
 @media (max-width:1180px) { .workbench-running { grid-template-columns:184px minmax(0,1fr) minmax(0,1.1fr); }.workbench-ready { grid-template-columns:184px minmax(0,1fr); }.research-stage { padding-inline:24px; }.report-desk { padding-inline:20px; }.report-paper { padding:25px; }.ledger-heading { flex-wrap:wrap; } }
 @media (max-width:920px) { .app-rail { height:auto; }.workbench-ready .research-stage { padding:32px 24px; }.recent-report-list a { align-items:flex-start; flex-direction:column; gap:6px; } }
 @media (max-width:560px) { .history-summary { grid-template-columns:1fr; }.history-filters { flex-wrap:wrap; gap:10px; }.history-filters label { width:100%; }.history-filters span { font-size:12px; }.composer-meta { font-size:11px; }.composer-meta span:last-child { display:none; }.report-toolbar { gap:12px; }.history-actions { flex-wrap:wrap; } }
